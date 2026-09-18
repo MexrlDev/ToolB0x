@@ -1,4 +1,5 @@
 #include "app.h"
+#include "ui.h"
 
 struct ctx G_CTX;
 
@@ -174,7 +175,6 @@ int pad_set_vibration(struct ctx *c, u8 large, u8 small) {
 
 int pad_set_trigger(struct ctx *c, int mode, int trig, int p1, int p2, int p3) {
     if (c->pad_h < 0 || !c->pad_set_trigger) return -1;
-    /* ScePadTriggerEffectParam layout — mode[2], reserved[6], param[2][12] */
     u8 buf[32]; m_set(buf, 0, 32);
     if (trig == 0 || trig == 2) buf[0] = (u8)mode;
     if (trig == 1 || trig == 2) buf[1] = (u8)mode;
@@ -232,7 +232,6 @@ void audio_tone(struct ctx *c, int freq, int ms) {
 }
 
 void ctx_cleanup(struct ctx *c) {
-    /* Kill vibration & lightbar */
     pad_set_vibration(c, 0, 0);
     pad_set_lightbar(c, 0, 0, 0);
     pad_set_trigger(c, 0, 2, 0, 0, 0);
