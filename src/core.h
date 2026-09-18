@@ -75,13 +75,13 @@ static inline void m_set(void *d, u8 v, u64 n)   { u8 *p = d; while (n--) *p++ =
 static inline void m_cpy(void *d, const void *s, u64 n) { u8 *dp = d; const u8 *sp = s; while (n--) *dp++ = *sp++; }
 static inline int  s_cmp(const char *a, const char *b) { while (*a && *a == *b) { a++; b++; } return (u8)*a - (u8)*b; }
 
-/* i32 -> decimal */
+/* FIXED: handles negative numbers correctly and does not clobber the sign */
 static inline int s_itoa(char *out, int v) {
-    if (v == 0) { out[0] = '0'; out[1] = 0; return 1; }
-    int neg = 0, p = 0; char tmp[12];
-    if (v < 0) { neg = 1; v = -v; }
-    while (v) { tmp[p++] = '0' + (v % 10); v /= 10; }
-    int n = p; if (neg) out[0] = '-', out[1] = 0, p = 0; else p = 0;
+    int p = 0;
+    if (v == 0) { out[p++] = '0'; out[p] = 0; return p; }
+    if (v < 0) { out[p++] = '-'; v = -v; }
+    char tmp[12]; int n = 0;
+    while (v) { tmp[n++] = '0' + (v % 10); v /= 10; }
     while (n) out[p++] = tmp[--n];
     out[p] = 0;
     return p;
