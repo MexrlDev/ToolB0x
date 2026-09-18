@@ -144,14 +144,71 @@ static const char *get_pad_hex(void) {
     return b;
 }
 
+/* Per-button live indicator strings.  Each getter has its own rotating
+ * static buffer so the menu system can hold several references across
+ * a single draw without them stomping each other. */
+static char *btn_str(u32 bit, const char *name) {
+    static char bufs[20][24];
+    static int  next = 0;
+    int idx = (next++) % 20;
+    char *b = bufs[idx];
+    int p = 0;
+    int pressed = (g_pad_snapshot & bit) != 0;
+    const char *tag = pressed ? "[X] " : "[ ] ";
+    while (*tag && p < 22) b[p++] = *tag++;
+    while (*name && p < 22) b[p++] = *name++;
+    b[p] = 0;
+    return b;
+}
+
+static const char *get_pd_cross(void)    { return btn_str(DS_CROSS,    "Cross");      }
+static const char *get_pd_circle(void)   { return btn_str(DS_CIRCLE,   "Circle");     }
+static const char *get_pd_triangle(void) { return btn_str(DS_TRIANGLE, "Triangle");   }
+static const char *get_pd_square(void)   { return btn_str(DS_SQUARE,   "Square");     }
+static const char *get_pd_up(void)       { return btn_str(DS_UP,       "Up");         }
+static const char *get_pd_down(void)     { return btn_str(DS_DOWN,     "Down");       }
+static const char *get_pd_left(void)     { return btn_str(DS_LEFT,     "Left");       }
+static const char *get_pd_right(void)    { return btn_str(DS_RIGHT,    "Right");      }
+static const char *get_pd_l1(void)       { return btn_str(DS_L1,       "L1");         }
+static const char *get_pd_r1(void)       { return btn_str(DS_R1,       "R1");         }
+static const char *get_pd_l2(void)       { return btn_str(DS_L2,       "L2");         }
+static const char *get_pd_r2(void)       { return btn_str(DS_R2,       "R2");         }
+static const char *get_pd_l3(void)       { return btn_str(DS_L3,       "L3");         }
+static const char *get_pd_r3(void)       { return btn_str(DS_R3,       "R3");         }
+static const char *get_pd_options(void)  { return btn_str(DS_OPTIONS,  "Options");    }
+static const char *get_pd_share(void)    { return btn_str(DS_SHARE,    "Share/Create");}
+static const char *get_pd_touch(void)    { return btn_str(DS_TOUCHPAD, "Touchpad");   }
+
 static Item scr_pad_items[] = {
-    { .label = "Raw Pad State", .kind = ITEM_HEADER },
-    { .label = "Bitmask:", .kind = ITEM_INFO, .get_info = get_pad_hex },
-    { .label = "Bits:",    .kind = ITEM_INFO, .info = "0x01 X   0x02 O   0x04 []  0x08 /\\" },
-    { .label = "D-Pad:",   .kind = ITEM_INFO, .info = "0x10 UP  0x20 DN  0x40 LT  0x80 RT" },
-    { .label = "Bumpers:", .kind = ITEM_INFO, .info = "0x100 L2  0x200 R2  0x400 L1  0x800 R1" },
-    { .label = "Extras:",  .kind = ITEM_INFO, .info = "L3 R3 Options Touchpad" },
-    { .label = "Back",     .kind = ITEM_BACK },
+    { .label = "Raw Pad State",  .kind = ITEM_HEADER },
+    { .label = "Bitmask:",       .kind = ITEM_INFO, .get_info = get_pad_hex },
+
+    { .label = "Face Buttons",   .kind = ITEM_HEADER },
+    { .label = "",  .kind = ITEM_INFO, .get_info = get_pd_cross    },
+    { .label = "",  .kind = ITEM_INFO, .get_info = get_pd_circle   },
+    { .label = "",  .kind = ITEM_INFO, .get_info = get_pd_triangle },
+    { .label = "",  .kind = ITEM_INFO, .get_info = get_pd_square   },
+
+    { .label = "D-Pad",          .kind = ITEM_HEADER },
+    { .label = "",  .kind = ITEM_INFO, .get_info = get_pd_up       },
+    { .label = "",  .kind = ITEM_INFO, .get_info = get_pd_down     },
+    { .label = "",  .kind = ITEM_INFO, .get_info = get_pd_left     },
+    { .label = "",  .kind = ITEM_INFO, .get_info = get_pd_right    },
+
+    { .label = "Shoulders",      .kind = ITEM_HEADER },
+    { .label = "",  .kind = ITEM_INFO, .get_info = get_pd_l1       },
+    { .label = "",  .kind = ITEM_INFO, .get_info = get_pd_l2       },
+    { .label = "",  .kind = ITEM_INFO, .get_info = get_pd_r1       },
+    { .label = "",  .kind = ITEM_INFO, .get_info = get_pd_r2       },
+
+    { .label = "Sticks / Misc",  .kind = ITEM_HEADER },
+    { .label = "",  .kind = ITEM_INFO, .get_info = get_pd_l3       },
+    { .label = "",  .kind = ITEM_INFO, .get_info = get_pd_r3       },
+    { .label = "",  .kind = ITEM_INFO, .get_info = get_pd_options  },
+    { .label = "",  .kind = ITEM_INFO, .get_info = get_pd_share    },
+    { .label = "",  .kind = ITEM_INFO, .get_info = get_pd_touch    },
+
+    { .label = "Back",           .kind = ITEM_BACK },
 };
 
 /* ============ CONTROLLER ============ */
@@ -338,7 +395,7 @@ Screen scr_lightbar     = { .title="Lightbar",        .items=scr_lightbar_items,
 Screen scr_lightbar_rgb = { .title="Custom RGB",      .items=scr_lightbar_rgb_items, .count=CNT(scr_lightbar_rgb_items), .visible=8,  .parent=&scr_lightbar };
 Screen scr_vib          = { .title="Vibration",       .items=scr_vib_items,          .count=CNT(scr_vib_items),          .visible=10, .parent=&scr_controller };
 Screen scr_trig         = { .title="Trigger Effects", .items=scr_trig_items,         .count=CNT(scr_trig_items),         .visible=8,  .parent=&scr_controller };
-Screen scr_pad          = { .title="Pad State",       .items=scr_pad_items,          .count=CNT(scr_pad_items),          .visible=10, .parent=&scr_controller };
+Screen scr_pad          = { .title="Pad State",       .items=scr_pad_items,          .count=CNT(scr_pad_items),          .visible=13, .parent=&scr_controller };
 Screen scr_system       = { .title="System Info",     .items=scr_system_items,       .count=CNT(scr_system_items),       .visible=12, .parent=&scr_main };
 Screen scr_video        = { .title="Video",           .items=scr_video_items,        .count=CNT(scr_video_items),        .visible=8,  .parent=&scr_main };
 Screen scr_audio        = { .title="Audio",           .items=scr_audio_items,        .count=CNT(scr_audio_items),        .visible=8,  .parent=&scr_main };
@@ -386,21 +443,25 @@ void menu_input(struct ctx *c, u32 raw, u32 pressed) {
     Screen *s = g_screen;
     Item *it = &s->items[s->cursor];
 
-    if (pressed & 0x10) move_cursor(-1);
-    if (pressed & 0x20) move_cursor( 1);
+    if (pressed & DS_UP)    move_cursor(-1);
+    if (pressed & DS_DOWN)  move_cursor( 1);
 
-    if (pressed & 0x40) { if (it->on_left)  it->on_left(it);  }
-    if (pressed & 0x80) { if (it->on_right) it->on_right(it); }
+    if (pressed & DS_LEFT)  { if (it->on_left)  it->on_left(it);  }
+    if (pressed & DS_RIGHT) { if (it->on_right) it->on_right(it); }
 
-    if (pressed & 0x01) {
-        if (it->kind == ITEM_SUBMENU) menu_goto(it->submenu);
-        else if (it->kind == ITEM_BACK) menu_goto(s->parent);
+    if (pressed & DS_CROSS) {
+        if (it->kind == ITEM_SUBMENU)     menu_goto(it->submenu);
+        else if (it->kind == ITEM_BACK)   menu_goto(s->parent);
         else if (it->kind == ITEM_ACTION) {
             if (it->on_confirm) it->on_confirm(it);
         }
     }
-    if (pressed & 0x02) {
+    if (pressed & DS_CIRCLE) {
         if (s->parent) menu_goto(s->parent);
+    }
+    if (pressed & DS_OPTIONS) {
+        if (it->kind == ITEM_SUBMENU) menu_goto(it->submenu);
+        else if (it->kind == ITEM_ACTION && it->on_confirm) it->on_confirm(it);
     }
 }
 
@@ -533,9 +594,9 @@ void menu_draw(struct ctx *c, u32 *fb) {
     const char *pre = "Pad: ";
     while (*pre && p < 10) pb[p++] = *pre++;
     struct { u32 bit; const char *name; } btns[] = {
-        {0x0001,"X"},{0x0002,"O"},{0x0004,"[]"},{0x0008,"/\\"},
-        {0x0010,"UP"},{0x0020,"DN"},{0x0040,"LT"},{0x0080,"RT"},
-        {0x0100,"L2"},{0x0200,"R2"},{0x0400,"L1"},{0x0800,"R1"},
+        {DS_CROSS,"X"},{DS_CIRCLE,"O"},{DS_TRIANGLE,"/\\"},{DS_SQUARE,"[]"},
+        {DS_UP,"UP"},{DS_DOWN,"DN"},{DS_LEFT,"LT"},{DS_RIGHT,"RT"},
+        {DS_L1,"L1"},{DS_R1,"R1"},{DS_L2,"L2"},{DS_R2,"R2"},
         {0,0}
     };
     for (int i = 0; btns[i].bit; i++) {
