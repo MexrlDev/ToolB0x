@@ -2,6 +2,29 @@
 #define APP_H
 #include "core.h"
 
+/* ------------------------------------------------------------------
+ * DualSense button bitmask — matches the DWORD returned by scePadRead.
+ * Order/values verified against libScePad + on-hardware testing.
+ * ------------------------------------------------------------------ */
+#define DS_SHARE     0x00000001
+#define DS_L3        0x00000002
+#define DS_R3        0x00000004
+#define DS_OPTIONS   0x00000008
+#define DS_UP        0x00000010
+#define DS_RIGHT     0x00000020
+#define DS_DOWN      0x00000040
+#define DS_LEFT      0x00000080
+#define DS_L2        0x00000100
+#define DS_R2        0x00000200
+#define DS_L1        0x00000400
+#define DS_R1        0x00000800
+#define DS_TRIANGLE  0x00001000
+#define DS_CIRCLE    0x00002000
+#define DS_CROSS     0x00004000
+#define DS_SQUARE    0x00008000
+#define DS_TOUCHPAD  0x00100000
+#define DS_PAD_MASK  0x001FFFFF
+
 struct ctx {
     void *G, *D;
     u64   eboot_base;
