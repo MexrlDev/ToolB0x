@@ -1,0 +1,57 @@
+name: Build LuaC0re Toolbox
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential binutils file python3
+
+      - name: Verify toolchain
+        run: |
+          gcc     --version | head -n1
+          ld      --version | head -n1
+          objcopy --version | head -n1
+          make    --version | head -n1
+          python3 --version
+
+      - name: Clean before build
+        run: |
+          rm -rf build
+          rm -f toolbox.elf toolbox.bin toolbox.hex
+
+      - name: Build
+        run: ./build.sh
+
+      - name: Inspect artifacts
+        run: |
+          ls -lh toolbox.elf toolbox.bin toolbox.hex
+          echo "---- ELF header ----"      ; readelf -h toolbox.elf
+          echo "---- Program headers ----" ; readelf -l toolbox.elf
+          echo "---- Section headers ----" ; readelf -S toolbox.elf
+          echo "---- Relocations ----"     ; readelf -r toolbox.elf | head -n 40
+          echo "---- Hex size ----"        ; wc -c toolbox.hex
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: luac0re-toolbox
+          path: |
+            toolbox.elf
+            toolbox.bin
+            toolbox.hex
+          if-no-files-found: error
+          retention-days: 30
