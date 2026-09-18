@@ -5,7 +5,6 @@
 
 extern char __bss_start[];
 extern char __bss_end[];
-
 extern char __rela_start[];
 extern char __rela_end[];
 
@@ -67,11 +66,27 @@ void _start(u64 eboot_base, u64 dlsym_addr, struct ext_args *ext) {
     menu_init();
     G_CTX.pad_prev = pad_raw(&G_CTX);
 
+    /* Local debug counters persist across loop iterations */
+    static u32 dbg_tick   = 0;
+    static u32 retry_tick = 0;
+
     /* Main loop */
     while (!g_exit_now) {
         u32 raw = pad_raw(&G_CTX);
         u32 pressed = raw & ~G_CTX.pad_prev;
         G_CTX.pad_prev = raw;
+
+        /* --- DEBUG: throttled raw pad dump --- */
+        if (++dbg_tick >= 60) {
+            dbg_tick = 0;
+            ulog_num(&G_CTX, "[toolbox] raw=", (u64)raw);
+        }
+
+        /* --- DEBUG: retry pad handle grab if it failed --- */
+        if (G_CTX.pad_h < 0 && ++retry_tick >= 120) {
+            retry_tick = 0;
+            ctx_pad_retry(&G_CTX);
+        }
 
         /* R1 = hard exit */
         if (raw & 0x0800) break;
