@@ -3,6 +3,9 @@
 
 struct ctx G_CTX;
 
+/* ============================================================
+ * Init — resolve every libkernel symbol we might need
+ * ============================================================ */
 void ctx_init(struct ctx *c, u64 eboot_base, u64 dlsym_addr, struct ext_args *ext) {
     m_set(c, 0, sizeof(*c));
     c->eboot_base = eboot_base;
@@ -48,6 +51,9 @@ void ctx_init(struct ctx *c, u64 eboot_base, u64 dlsym_addr, struct ext_args *ex
     c->getsockname_fn = SYM(G, D, LIBKERNEL_HANDLE, "getsockname");
 }
 
+/* ============================================================
+ * Logging helpers
+ * ============================================================ */
 void ulog(struct ctx *c, const char *msg) {
     if (c->log_fd < 0 || !c->sendto_fn) return;
     NC(c->G, c->sendto_fn, (u64)c->log_fd, (u64)msg, (u64)s_len(msg),
@@ -62,6 +68,9 @@ void ulog_num(struct ctx *c, const char *prefix, u64 v) {
     ulog(c, b);
 }
 
+/* ============================================================
+ * Video
+ * ============================================================ */
 int ctx_video_up(struct ctx *c, u64 eboot_base) {
     void *G = c->G, *D = c->D;
     if (!c->usleep || !c->load_mod || !c->alloc_dm || !c->map_dm) return -1;
@@ -120,10 +129,13 @@ int ctx_video_up(struct ctx *c, u64 eboot_base) {
     return 0;
 }
 
+/* ============================================================
+ * Audio
+ * ============================================================ */
 void ctx_audio_up(struct ctx *c) {
     void *G = c->G, *D = c->D;
     s32 aud = (s32)NC(G, c->load_mod, (u64)"libSceAudioOut.sprx",0,0,0,0,0);
-    if (aud < 0) return;
+    if (aud < 0) { ulog(c, "[toolbox] libSceAudioOut load FAILED\n"); return; }
     c->aud_open  = SYM(G, D, aud, "sceAudioOutOpen");
     c->aud_out   = SYM(G, D, aud, "sceAudioOutOutput");
     c->aud_close = SYM(G, D, aud, "sceAudioOutClose");
@@ -132,35 +144,107 @@ void ctx_audio_up(struct ctx *c) {
     if (c->aud_open)
         c->audio_h = (s32)NC(G, c->aud_open, 0xFF, 0, 0,
                              SAMPLES_PER_BUF, SAMPLE_RATE, AUDIO_S16_STEREO);
+    ulog_num(c, "[toolbox] audio_h=", (u64)(u32)c->audio_h);
 }
 
+/* ============================================================
+ * Pad init — with verbose debugging + real user-id lookup
+ * ============================================================ */
 void ctx_pad_up(struct ctx *c) {
     void *G = c->G, *D = c->D;
-    s32 pad = (s32)NC(G, c->load_mod, (u64)"libScePad.sprx",0,0,0,0,0);
-    if (pad < 0) return;
-    c->pad_init = SYM(G, D, pad, "scePadInit");
-    c->pad_geth = SYM(G, D, pad, "scePadGetHandle");
-    c->pad_read = SYM(G, D, pad, "scePadRead");
+
+    s32 pad = (s32)NC(G, c->load_mod, (u64)"libScePad.sprx", 0,0,0,0,0);
+    ulog_num(c, "[toolbox] libScePad handle=", (u64)(u32)pad);
+    if (pad < 0) { ulog(c, "[toolbox] libScePad load FAILED\n"); return; }
+
+    /* Query the *real* initial user id.  scePadGetHandle requires a
+     * valid user, and on PS5 it is NOT always 1 — this was the bug. */
+    u32 real_user_id = 0;
+    s32 usr = (s32)NC(G, c->load_mod, (u64)"libSceUserService.sprx", 0,0,0,0,0);
+    ulog_num(c, "[toolbox] libSceUserService handle=", (u64)(u32)usr);
+    if (usr > 0) {
+        void *get_user = SYM(G, D, usr, "sceUserServiceGetInitialUser");
+        ulog_num(c, "[toolbox] GetInitialUser addr=", (u64)get_user);
+        if (get_user) {
+            u32 uid = 0;
+            s32 rc = (s32)NC(G, get_user, (u64)&uid, 0,0,0,0,0);
+            ulog_num(c, "[toolbox] GetInitialUser ret=",  (u64)(u32)rc);
+            ulog_num(c, "[toolbox] initial uid      =",  (u64)uid);
+            if (rc == 0 && uid != 0) real_user_id = uid;
+        }
+    }
+    if (real_user_id == 0) {
+        real_user_id = (u32)c->ext->dbg[0];
+        ulog_num(c, "[toolbox] fallback to lua uid=", (u64)real_user_id);
+        if (!real_user_id) real_user_id = 1;
+    }
+    c->user_id = (s32)real_user_id;
+    ulog_num(c, "[toolbox] using user_id=", (u64)(u32)c->user_id);
+
+    c->pad_init         = SYM(G, D, pad, "scePadInit");
+    c->pad_geth         = SYM(G, D, pad, "scePadGetHandle");
+    c->pad_read         = SYM(G, D, pad, "scePadRead");
     c->pad_set_lightbar = SYM(G, D, pad, "scePadSetLightBar");
     c->pad_set_vib      = SYM(G, D, pad, "scePadSetVibration");
     c->pad_set_trigger  = SYM(G, D, pad, "scePadSetTriggerEffect");
 
-    if (c->pad_init) NC(G, c->pad_init, 0,0,0,0,0,0);
-    c->user_id = (s32)c->ext->dbg[0];
-    if (!c->user_id) c->user_id = 1;
-    if (c->pad_geth) c->pad_h = (s32)NC(G, c->pad_geth, (u64)c->user_id, 0,0,0,0,0);
+    ulog_num(c, "[toolbox] scePadInit      addr=", (u64)c->pad_init);
+    ulog_num(c, "[toolbox] scePadGetHandle addr=", (u64)c->pad_geth);
+    ulog_num(c, "[toolbox] scePadRead      addr=", (u64)c->pad_read);
+
+    if (c->pad_init) {
+        s32 r = (s32)NC(G, c->pad_init, 0,0,0,0,0,0);
+        ulog_num(c, "[toolbox] scePadInit ret=", (u64)(u32)r);
+        if (c->usleep) NC(G, c->usleep, 50000, 0,0,0,0,0);
+    }
+
+    if (c->pad_geth) {
+        c->pad_h = (s32)NC(G, c->pad_geth, (u64)c->user_id, 0,0,0,0,0);
+        ulog_num(c, "[toolbox] scePadGetHandle ret(pad_h)=", (u64)(u32)c->pad_h);
+    } else {
+        ulog(c, "[toolbox] scePadGetHandle not resolved!\n");
+    }
 }
 
+/* Called from main loop if pad_h < 0 — re-attempts handle grab */
+void ctx_pad_retry(struct ctx *c) {
+    if (c->pad_h >= 0 || !c->pad_geth) return;
+    if (c->pad_init) (void)NC(c->G, c->pad_init, 0,0,0,0,0,0);
+    c->pad_h = (s32)NC(c->G, c->pad_geth, (u64)c->user_id, 0,0,0,0,0);
+    ulog_num(c, "[toolbox] pad_h retry ->", (u64)(u32)c->pad_h);
+}
+
+/* ============================================================
+ * Pad read — verbose, with periodic error/disconnect logging
+ * ============================================================ */
 u32 pad_raw(struct ctx *c) {
     if (c->pad_h < 0 || !c->pad_read) return 0;
+
     u8 buf[128]; m_set(buf, 0, 128);
-    s32 n = (s32)NC(c->G, c->pad_read, (u64)c->pad_h, (u64)buf, 1, 0,0,0);
-    if (n <= 0 || (u32)n >= 0x80000000) return 0;
+    s32 n = (s32)NC(c->G, c->pad_read,
+                    (u64)c->pad_h, (u64)buf, 1, 0, 0, 0);
+    if (n <= 0) {
+        static u32 err_log = 0;
+        if ((err_log++ % 300) == 0)
+            ulog_num(c, "[toolbox] scePadRead error ret=", (u64)(s64)n);
+        return 0;
+    }
+    if ((u32)n >= 0x80000000) return 0;
+
     u32 r = *(u32*)buf;
-    if (r & 0x80000000) return 0;
+    /* PS5 "not connected" marker — highest bit set */
+    if (r & 0x80000000) {
+        static u32 disc_log = 0;
+        if ((disc_log++ % 300) == 0)
+            ulog_num(c, "[toolbox] pad disconnected, dword0=", (u64)r);
+        return 0;
+    }
     return r & 0x001FFFFF;
 }
 
+/* ============================================================
+ * Pad output (lightbar / vib / trigger)
+ * ============================================================ */
 int pad_set_lightbar(struct ctx *c, u8 r, u8 g, u8 b) {
     if (c->pad_h < 0 || !c->pad_set_lightbar) return -1;
     struct { u8 r, g, b, x; } col = { r, g, b, 0 };
@@ -187,6 +271,9 @@ int pad_set_trigger(struct ctx *c, int mode, int trig, int p1, int p2, int p3) {
     return (s32)NC(c->G, c->pad_set_trigger, (u64)c->pad_h, (u64)buf, 0,0,0,0);
 }
 
+/* ============================================================
+ * Video flip
+ * ============================================================ */
 void video_flip(struct ctx *c, int wait_vsync) {
     if (c->video_h < 0 || !c->vid_flip) return;
     NC(c->G, c->vid_flip, (u64)c->video_h, (u64)c->active, 1,
@@ -199,6 +286,9 @@ void video_flip(struct ctx *c, int wait_vsync) {
     c->total_frames++;
 }
 
+/* ============================================================
+ * Clock / DM helpers
+ * ============================================================ */
 u64 get_uptime_ms(struct ctx *c) {
     if (!c->clock_gettime) return 0;
     u64 ts[2] = {0,0};
@@ -211,6 +301,9 @@ u64 get_dm_size(struct ctx *c) {
     return NC(c->G, c->dm_size, 0,0,0,0,0,0);
 }
 
+/* ============================================================
+ * Audio tone — square wave for `ms`
+ * ============================================================ */
 void audio_tone(struct ctx *c, int freq, int ms) {
     if (c->audio_h < 0 || !c->aud_out) return;
     static s16 buf[SAMPLES_PER_BUF * 2];
@@ -231,6 +324,9 @@ void audio_tone(struct ctx *c, int freq, int ms) {
     }
 }
 
+/* ============================================================
+ * Cleanup
+ * ============================================================ */
 void ctx_cleanup(struct ctx *c) {
     pad_set_vibration(c, 0, 0);
     pad_set_lightbar(c, 0, 0, 0);
