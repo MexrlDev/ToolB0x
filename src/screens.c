@@ -15,6 +15,7 @@
 Screen *g_screen;
 
 static int  g_rgb[3]  = {255, 100, 0};
+static int  g_lb_brightness = 100;   /* percent */
 static int  g_vib_l   = 128, g_vib_s = 128;
 static int  g_lb_mode = 0;
 static int  g_lb_hue  = 0;
@@ -24,9 +25,17 @@ static int  g_vib_phase = 0;
 static char g_local_ip[20] = "unknown";
 static int  g_local_ip_valid = 0;
 
-static void set_lb_from_rgb(void) {
-    pad_set_lightbar(&G_CTX, (u8)g_rgb[0], (u8)g_rgb[1], (u8)g_rgb[2]);
+static void apply_lb(void) {
+    int r = (g_rgb[0] * g_lb_brightness) / 100;
+    int g = (g_rgb[1] * g_lb_brightness) / 100;
+    int b = (g_rgb[2] * g_lb_brightness) / 100;
+    if (r > 255) r = 255;
+    if (g > 255) g = 255;
+    if (b > 255) b = 255;
+    pad_set_lightbar(&G_CTX, (u8)r, (u8)g, (u8)b);
 }
+static void set_lb_from_rgb(void) { apply_lb(); }
+
 static void clamp(int *v, int lo, int hi) {
     if (*v < lo) *v = lo;
     if (*v > hi) *v = hi;
@@ -41,11 +50,22 @@ static void act_lb_preset(Item *it) {
     g_rgb[2] = rgb & 0xFF;
     set_lb_from_rgb();
 }
-static void act_lb_off(Item *it)  { (void)it; g_lb_mode = 0; g_rgb[0]=g_rgb[1]=g_rgb[2]=0; set_lb_from_rgb(); }
+static void act_lb_off(Item *it)  { (void)it; g_lb_mode = 0; g_rgb[0]=g_rgb[1]=g_rgb[2]=0; apply_lb(); }
 static void act_lb_rb(Item *it)   { (void)it; g_lb_mode = 1; }
 static void act_lb_stop(Item *it) { (void)it; g_lb_mode = 0; set_lb_from_rgb(); }
 
+static void act_lb_dim   (Item *it) { (void)it; g_lb_brightness = 25;  apply_lb(); }
+static void act_lb_medium(Item *it) { (void)it; g_lb_brightness = 50;  apply_lb(); }
+static void act_lb_high  (Item *it) { (void)it; g_lb_brightness = 75;  apply_lb(); }
+static void act_lb_max   (Item *it) { (void)it; g_lb_brightness = 100; apply_lb(); }
+
 static Item scr_lightbar_items[] = {
+    { .label = "Brightness", .kind = ITEM_HEADER },
+    { .label = "Dim (25%)",     .kind = ITEM_ACTION, .on_confirm = act_lb_dim    },
+    { .label = "Medium (50%)",  .kind = ITEM_ACTION, .on_confirm = act_lb_medium },
+    { .label = "High (75%)",    .kind = ITEM_ACTION, .on_confirm = act_lb_high   },
+    { .label = "Maximum (100%)",.kind = ITEM_ACTION, .on_confirm = act_lb_max    },
+
     { .label = "Static Colors", .kind = ITEM_HEADER },
     { .label = "Off",    .kind = ITEM_ACTION, .on_confirm = act_lb_off },
     { .label = "Red",    .kind = ITEM_ACTION, .on_confirm = act_lb_preset, .data = 0xFF0000 },
@@ -56,6 +76,7 @@ static Item scr_lightbar_items[] = {
     { .label = "Purple", .kind = ITEM_ACTION, .on_confirm = act_lb_preset, .data = 0xA020FF },
     { .label = "Cyan",   .kind = ITEM_ACTION, .on_confirm = act_lb_preset, .data = 0x00FFFF },
     { .label = "Pink",   .kind = ITEM_ACTION, .on_confirm = act_lb_preset, .data = 0xFF40A0 },
+
     { .label = "Animated", .kind = ITEM_HEADER },
     { .label = "Rainbow Pulse",  .kind = ITEM_ACTION, .on_confirm = act_lb_rb },
     { .label = "Stop Animation", .kind = ITEM_ACTION, .on_confirm = act_lb_stop },
@@ -66,6 +87,8 @@ static Item scr_lightbar_items[] = {
 static const char *get_rgb_r(void) { static char b[8]; s_itoa(b, g_rgb[0]); return b; }
 static const char *get_rgb_g(void) { static char b[8]; s_itoa(b, g_rgb[1]); return b; }
 static const char *get_rgb_b(void) { static char b[8]; s_itoa(b, g_rgb[2]); return b; }
+static const char *get_lb_pct(void){ static char b[8];
+    int p = s_itoa(b, g_lb_brightness); b[p++]='%'; b[p]=0; return b; }
 
 static void rgb_inc_r(Item *it) { (void)it; g_rgb[0] += 16; clamp(&g_rgb[0],0,255); set_lb_from_rgb(); }
 static void rgb_dec_r(Item *it) { (void)it; g_rgb[0] -= 16; clamp(&g_rgb[0],0,255); set_lb_from_rgb(); }
@@ -74,8 +97,13 @@ static void rgb_dec_g(Item *it) { (void)it; g_rgb[1] -= 16; clamp(&g_rgb[1],0,25
 static void rgb_inc_b(Item *it) { (void)it; g_rgb[2] += 16; clamp(&g_rgb[2],0,255); set_lb_from_rgb(); }
 static void rgb_dec_b(Item *it) { (void)it; g_rgb[2] -= 16; clamp(&g_rgb[2],0,255); set_lb_from_rgb(); }
 
+static void lb_br_inc(Item *it) { (void)it; g_lb_brightness += 10; clamp(&g_lb_brightness,10,100); apply_lb(); }
+static void lb_br_dec(Item *it) { (void)it; g_lb_brightness -= 10; clamp(&g_lb_brightness,10,100); apply_lb(); }
+
 static Item scr_lightbar_rgb_items[] = {
-    { .label = "Left/Right to adjust RGB", .kind = ITEM_HEADER },
+    { .label = "Left/Right to adjust", .kind = ITEM_HEADER },
+    { .label = "Brightness", .kind = ITEM_SLIDER, .min=10, .max=100, .step=10,
+      .on_left = lb_br_dec, .on_right = lb_br_inc, .get_info = get_lb_pct },
     { .label = "Red",   .kind = ITEM_SLIDER, .min=0,.max=255,.step=16,
       .on_left = rgb_dec_r, .on_right = rgb_inc_r, .get_info = get_rgb_r },
     { .label = "Green", .kind = ITEM_SLIDER, .min=0,.max=255,.step=16,
@@ -112,7 +140,6 @@ static Item scr_vib_items[] = {
 
 /* ============ TRIGGERS ============ */
 static void trig_do_off(Item *it) { (void)it; pad_set_trigger_all_off(&G_CTX); }
-
 static void trig_fb_L_weak  (Item *it) { (void)it; pad_set_trigger_feedback(&G_CTX, TRIG_L2, 5, 3); }
 static void trig_fb_L_med   (Item *it) { (void)it; pad_set_trigger_feedback(&G_CTX, TRIG_L2, 5, 5); }
 static void trig_fb_L_strong(Item *it) { (void)it; pad_set_trigger_feedback(&G_CTX, TRIG_L2, 5, 8); }
@@ -120,15 +147,12 @@ static void trig_fb_R_weak  (Item *it) { (void)it; pad_set_trigger_feedback(&G_C
 static void trig_fb_R_med   (Item *it) { (void)it; pad_set_trigger_feedback(&G_CTX, TRIG_R2, 5, 5); }
 static void trig_fb_R_strong(Item *it) { (void)it; pad_set_trigger_feedback(&G_CTX, TRIG_R2, 5, 8); }
 static void trig_fb_both    (Item *it) { (void)it; pad_set_trigger_feedback(&G_CTX, TRIG_BOTH, 5, 5); }
-
 static void trig_weap_L (Item *it) { (void)it; pad_set_trigger_weapon(&G_CTX, TRIG_L2, 2, 6, 8); }
 static void trig_weap_R (Item *it) { (void)it; pad_set_trigger_weapon(&G_CTX, TRIG_R2, 2, 6, 8); }
 static void trig_weap_both(Item *it) { (void)it; pad_set_trigger_weapon(&G_CTX, TRIG_BOTH, 2, 6, 8); }
-
 static void trig_vib_L (Item *it) { (void)it; pad_set_trigger_vibrate(&G_CTX, TRIG_L2, 5, 6, 40); }
 static void trig_vib_R (Item *it) { (void)it; pad_set_trigger_vibrate(&G_CTX, TRIG_R2, 5, 6, 40); }
 static void trig_vib_both(Item *it) { (void)it; pad_set_trigger_vibrate(&G_CTX, TRIG_BOTH, 5, 6, 40); }
-
 static void trig_slope_L (Item *it) { (void)it; pad_set_trigger_slope(&G_CTX, TRIG_L2, 2, 7, 1, 8); }
 static void trig_slope_R (Item *it) { (void)it; pad_set_trigger_slope(&G_CTX, TRIG_R2, 2, 7, 1, 8); }
 static void trig_slope_both(Item *it) { (void)it; pad_set_trigger_slope(&G_CTX, TRIG_BOTH, 2, 7, 1, 8); }
@@ -159,12 +183,53 @@ static Item scr_trig_items[] = {
     { .label = "Back", .kind = ITEM_BACK },
 };
 
+/* ============ SPEAKER ============ */
+static void spk_440(Item *it) {
+    (void)it;
+    int p = pad_speaker_play(&G_CTX, 440, 400);
+    if (p >= 0) notify_send(&G_CTX, "Speaker tone played.", 0);
+    else        notify_send(&G_CTX, "Speaker not available.", 0);
+}
+static void spk_660(Item *it) {
+    (void)it;
+    int p = pad_speaker_play(&G_CTX, 660, 400);
+    if (p >= 0) notify_send(&G_CTX, "Speaker tone played.", 0);
+    else        notify_send(&G_CTX, "Speaker not available.", 0);
+}
+static void spk_880(Item *it) {
+    (void)it;
+    int p = pad_speaker_play(&G_CTX, 880, 400);
+    if (p >= 0) notify_send(&G_CTX, "Speaker tone played.", 0);
+    else        notify_send(&G_CTX, "Speaker not available.", 0);
+}
+static void spk_sweep(Item *it) {
+    (void)it;
+    int p = -1;
+    int freqs[5] = { 262, 330, 392, 523, 660 };
+    for (int i = 0; i < 5; i++) {
+        p = pad_speaker_play(&G_CTX, freqs[i], 200);
+        if (p < 0) break;
+    }
+    if (p >= 0) notify_send(&G_CTX, "Speaker sweep played.", 0);
+    else        notify_send(&G_CTX, "Speaker not available.", 0);
+}
+
+static Item scr_speaker_items[] = {
+    { .label = "DualSense Speaker", .kind = ITEM_HEADER },
+    { .label = "Test 440 Hz (A4)",  .kind = ITEM_ACTION, .on_confirm = spk_440  },
+    { .label = "Test 660 Hz (E5)",  .kind = ITEM_ACTION, .on_confirm = spk_660  },
+    { .label = "Test 880 Hz (A5)",  .kind = ITEM_ACTION, .on_confirm = spk_880  },
+    { .label = "Test Melody Sweep", .kind = ITEM_ACTION, .on_confirm = spk_sweep },
+    { .label = "Back", .kind = ITEM_BACK },
+};
+
 /* ============ CONTROLLER MENU ============ */
 static Item scr_controller_items[] = {
     { .label = "DualSense",       .kind = ITEM_HEADER },
     { .label = "Lightbar",        .kind = ITEM_SUBMENU, .submenu = &scr_lightbar },
     { .label = "Vibration",       .kind = ITEM_SUBMENU, .submenu = &scr_vib },
     { .label = "Trigger Effects", .kind = ITEM_SUBMENU, .submenu = &scr_trig },
+    { .label = "Speaker Test",    .kind = ITEM_SUBMENU, .submenu = &scr_speaker },
     { .label = "Pad State View",  .kind = ITEM_SUBMENU, .submenu = &scr_pad },
     { .label = "Back",            .kind = ITEM_BACK },
 };
@@ -192,19 +257,13 @@ static void sys_refresh(void) {
     s_itoa(t, G_CTX.pad_h);          sys_add_line("Pad Handle", t);
     s_itoa(t, G_CTX.audio_h);        sys_add_line("Audio Handle", t);
     s_itoa(t, G_CTX.video_h);        sys_add_line("Video Handle", t);
-
     s_hex64(t, get_dm_size(&G_CTX)); sys_add_line("Direct Mem", t);
-
     u32 fw = get_fw_version_int(&G_CTX);
     s_hex64(t, (u64)fw);             sys_add_line("FW raw", t);
-
     s_itoa(t, (int)(get_uptime_ms(&G_CTX) / 1000)); sys_add_line("Uptime (s)", t);
     s_itoa(t, (int)G_CTX.total_frames);             sys_add_line("Frames", t);
-
     s_hex64(t, G_CTX.eboot_base);    sys_add_line("EBOOT base", t);
     s_hex64(t, (u64)G_CTX.G);        sys_add_line("Gadget", t);
-    s_hex64(t, (u64)G_CTX.ime_init); sys_add_line("IME init", t);
-    s_hex64(t, (u64)G_CTX.module_info_from_addr); sys_add_line("ModInfo addr", t);
 }
 
 static const char *get_sys_line_0(void) { return g_sysinfo_n > 0 ? g_sysinfo[0] : ""; }
@@ -217,8 +276,6 @@ static const char *get_sys_line_6(void) { return g_sysinfo_n > 6 ? g_sysinfo[6] 
 static const char *get_sys_line_7(void) { return g_sysinfo_n > 7 ? g_sysinfo[7] : ""; }
 static const char *get_sys_line_8(void) { return g_sysinfo_n > 8 ? g_sysinfo[8] : ""; }
 static const char *get_sys_line_9(void) { return g_sysinfo_n > 9 ? g_sysinfo[9] : ""; }
-static const char *get_sys_line_10(void){ return g_sysinfo_n > 10 ? g_sysinfo[10] : ""; }
-static const char *get_sys_line_11(void){ return g_sysinfo_n > 11 ? g_sysinfo[11] : ""; }
 
 static Item scr_system_items[] = {
     { .label = "System Information", .kind = ITEM_HEADER },
@@ -232,8 +289,6 @@ static Item scr_system_items[] = {
     { .label = "", .kind = ITEM_INFO, .get_info = get_sys_line_7 },
     { .label = "", .kind = ITEM_INFO, .get_info = get_sys_line_8 },
     { .label = "", .kind = ITEM_INFO, .get_info = get_sys_line_9 },
-    { .label = "", .kind = ITEM_INFO, .get_info = get_sys_line_10 },
-    { .label = "", .kind = ITEM_INFO, .get_info = get_sys_line_11 },
     { .label = "Back", .kind = ITEM_BACK },
 };
 
@@ -275,33 +330,24 @@ static Item scr_audio_items[] = {
 };
 
 /* ============ NETWORK ============ */
-static void net_udp_test(Item *it) {
-    (void)it;
-    ulog(&G_CTX, "[toolbox] UDP log test from toolbox!\n");
-}
+static void net_udp_test(Item *it) { (void)it; ulog(&G_CTX, "[toolbox] UDP log test\n"); }
 
 static void refresh_local_ip(void) {
     if (g_local_ip_valid) return;
     g_local_ip_valid = 1;
     s_cpy(g_local_ip, "unavailable");
-
     if (!G_CTX.socket_fn || !G_CTX.getsockname_fn) return;
-
     s32 fd = (s32)NC(G_CTX.G, G_CTX.socket_fn, 2, 2, 0, 0, 0, 0);
     if (fd < 0) return;
-
     u8 sa[16]; m_set(sa, 0, 16);
     sa[0] = 16; sa[1] = 2;
     *(u16*)(sa + 2) = (80 >> 8) | ((80 & 0xFF) << 8);
     *(u32*)(sa + 4) = 0x08080808;
-
     void *connect_fn = SYM(G_CTX.G, G_CTX.D, LIBKERNEL_HANDLE, "connect");
     if (connect_fn) NC(G_CTX.G, connect_fn, (u64)fd, (u64)sa, 16, 0, 0, 0);
-
     u8 out[16]; s32 outlen = 16;
     NC(G_CTX.G, G_CTX.getsockname_fn, (u64)fd, (u64)out, (u64)&outlen, 0, 0, 0);
     if (G_CTX.close_fn) NC(G_CTX.G, G_CTX.close_fn, (u64)fd, 0, 0, 0, 0, 0);
-
     u32 ip = *(u32*)(out + 4);
     int p = 0;
     p += s_itoa(g_local_ip + p, ip & 0xFF);         g_local_ip[p++] = '.';
@@ -309,11 +355,7 @@ static void refresh_local_ip(void) {
     p += s_itoa(g_local_ip + p, (ip >> 16) & 0xFF); g_local_ip[p++] = '.';
     p += s_itoa(g_local_ip + p, (ip >> 24) & 0xFF); g_local_ip[p]   = 0;
 }
-
-static const char *get_local_ip_str(void) {
-    refresh_local_ip();
-    return g_local_ip;
-}
+static const char *get_local_ip_str(void) { refresh_local_ip(); return g_local_ip; }
 
 static Item scr_network_items[] = {
     { .label = "Network Tools",  .kind = ITEM_HEADER },
@@ -326,22 +368,13 @@ static Item scr_network_items[] = {
 static void notify_custom(Item *it) {
     (void)it;
     char msg[128];
-    int r = osk_prompt(&G_CTX, "Notification text", "Hello from LuaC0re!",
-                       msg, sizeof(msg), 100);
-    if (r != 0) {
-        ulog(&G_CTX, "[toolbox] notify custom: OSK cancelled/failed\n");
-        return;
-    }
+    int r = osk_prompt(&G_CTX, "Notification", "Hello from LuaC0re!",
+                       msg, sizeof(msg), 60);
+    if (r != 0) return;
     notify_send(&G_CTX, msg, 0);
 }
-static void notify_hello(Item *it) {
-    (void)it;
-    notify_send(&G_CTX, "Hello from the LuaC0re Toolbox!", 0);
-}
-static void notify_running(Item *it) {
-    (void)it;
-    notify_send(&G_CTX, "Toolbox is running.", 0);
-}
+static void notify_hello(Item *it)   { (void)it; notify_send(&G_CTX, "Hello from the LuaC0re Toolbox!", 0); }
+static void notify_running(Item *it) { (void)it; notify_send(&G_CTX, "Toolbox is running.", 0); }
 static void notify_ip(Item *it) {
     (void)it;
     refresh_local_ip();
@@ -352,14 +385,11 @@ static void notify_ip(Item *it) {
     buf[p] = 0;
     notify_send(&G_CTX, buf, 0);
 }
-static void notify_test(Item *it) {
-    (void)it;
-    notify_send(&G_CTX, "Test notification 1-2-3.", 0);
-}
+static void notify_test(Item *it) { (void)it; notify_send(&G_CTX, "Test notification 1-2-3.", 0); }
 
 static Item scr_notify_items[] = {
     { .label = "System Notifications", .kind = ITEM_HEADER },
-    { .label = "Custom Message (OSK)", .kind = ITEM_ACTION, .on_confirm = notify_custom },
+    { .label = "Custom Message",       .kind = ITEM_ACTION, .on_confirm = notify_custom },
     { .label = "Presets",              .kind = ITEM_HEADER },
     { .label = "Hello World",          .kind = ITEM_ACTION, .on_confirm = notify_hello },
     { .label = "Toolbox Running",      .kind = ITEM_ACTION, .on_confirm = notify_running },
@@ -369,16 +399,11 @@ static Item scr_notify_items[] = {
 };
 
 /* ============ OPTICAL DRIVE ============ */
-static void eject_notify_result(int r, const char *ok_msg, const char *generic_fail) {
-    if (r == 0) {
-        notify_send(&G_CTX, ok_msg, 0);
-    } else if (r == -1) {
-        notify_send(&G_CTX, "No optical drive found.", 0);
-    } else if (r == -3) {
-        notify_send(&G_CTX, "ioctl unavailable.", 0);
-    } else {
-        notify_send(&G_CTX, generic_fail, 0);
-    }
+static void eject_notify_result(int r, const char *ok_msg, const char *fail_msg) {
+    if (r == 0)        notify_send(&G_CTX, ok_msg, 0);
+    else if (r == -1)  notify_send(&G_CTX, "No optical device in /dev.", 0);
+    else if (r == -3)  notify_send(&G_CTX, "ioctl unavailable.", 0);
+    else               notify_send(&G_CTX, fail_msg, 0);
 }
 
 static void act_eject_open(Item *it) {
@@ -386,7 +411,6 @@ static void act_eject_open(Item *it) {
     int r = eject_disc(&G_CTX);
     eject_notify_result(r, "Disc ejected.", "Eject failed.");
 }
-
 static void act_eject_close(Item *it) {
     (void)it;
     int r = eject_close(&G_CTX);
@@ -397,9 +421,10 @@ static Item scr_disc_items[] = {
     { .label = "Optical Drive", .kind = ITEM_HEADER },
     { .label = "Eject Disc",     .kind = ITEM_ACTION, .on_confirm = act_eject_open  },
     { .label = "Reload / Close", .kind = ITEM_ACTION, .on_confirm = act_eject_close },
-    { .label = "Notes", .kind = ITEM_HEADER },
-    { .label = "Only works when a", .kind = ITEM_INFO, .info = "disc is inserted." },
-    { .label = "Uses FreeBSD CDIO", .kind = ITEM_INFO, .info = "ioctl via /dev/cd0." },
+    { .label = "Status", .kind = ITEM_HEADER },
+    { .label = "PS5 retail firmware",    .kind = ITEM_INFO, .info = "does not expose the" },
+    { .label = "optical drive via /dev", .kind = ITEM_INFO, .info = "in userland. Eject" },
+    { .label = "may not be possible.",   .kind = ITEM_INFO, .info = "from this context." },
     { .label = "Back", .kind = ITEM_BACK },
 };
 
@@ -436,12 +461,13 @@ static Item scr_main_items[] = {
 
 #define CNT(a) ((int)(sizeof(a) / sizeof((a)[0])))
 
-Screen scr_main         = { .title="LuaC0re Toolbox", .items=scr_main_items,         .count=CNT(scr_main_items),         .visible=9,  .parent=0 };
+Screen scr_main         = { .title="LuaC0re Toolbox", .items=scr_main_items,         .count=CNT(scr_main_items),         .visible=10, .parent=0 };
 Screen scr_controller   = { .title="Controller",      .items=scr_controller_items,   .count=CNT(scr_controller_items),   .visible=8,  .parent=&scr_main };
 Screen scr_lightbar     = { .title="Lightbar",        .items=scr_lightbar_items,     .count=CNT(scr_lightbar_items),     .visible=12, .parent=&scr_controller };
 Screen scr_lightbar_rgb = { .title="Custom RGB",      .items=scr_lightbar_rgb_items, .count=CNT(scr_lightbar_rgb_items), .visible=8,  .parent=&scr_lightbar };
 Screen scr_vib          = { .title="Vibration",       .items=scr_vib_items,          .count=CNT(scr_vib_items),          .visible=10, .parent=&scr_controller };
 Screen scr_trig         = { .title="Trigger Effects", .items=scr_trig_items,         .count=CNT(scr_trig_items),         .visible=13, .parent=&scr_controller };
+Screen scr_speaker      = { .title="Speaker Test",    .items=scr_speaker_items,      .count=CNT(scr_speaker_items),      .visible=8,  .parent=&scr_controller };
 Screen scr_pad          = { .title="Pad State",       .parent=&scr_controller, .custom_draw = padview_draw, .custom_input = padview_input };
 Screen scr_system       = { .title="System Info",     .items=scr_system_items,       .count=CNT(scr_system_items),       .visible=13, .parent=&scr_main };
 Screen scr_video        = { .title="Video",           .items=scr_video_items,        .count=CNT(scr_video_items),        .visible=8,  .parent=&scr_main };
@@ -459,7 +485,7 @@ void menu_init(void) {
     g_screen = &scr_main;
     Screen *all[] = {
         &scr_main, &scr_controller, &scr_lightbar, &scr_lightbar_rgb,
-        &scr_vib, &scr_trig, &scr_pad, &scr_system, &scr_video,
+        &scr_vib, &scr_trig, &scr_speaker, &scr_pad, &scr_system, &scr_video,
         &scr_audio, &scr_network, &scr_notify, &scr_disc, &scr_credits,
         &scr_debug, &scr_memview, &scr_modview
     };
@@ -533,16 +559,16 @@ void menu_tick(struct ctx *c) {
             int h = g_lb_hue / 43;
             int f = (g_lb_hue - h * 43) * 6;
             int q = 255 - f, t = f;
-            u8 r, g, b;
+            g_rgb[0] = 0; g_rgb[1] = 0; g_rgb[2] = 0;
             switch (h) {
-                case 0: r=255; g=t;   b=0;   break;
-                case 1: r=q;   g=255; b=0;   break;
-                case 2: r=0;   g=255; b=t;   break;
-                case 3: r=0;   g=q;   b=255; break;
-                case 4: r=t;   g=0;   b=255; break;
-                default:r=255; g=0;   b=q;   break;
+                case 0: g_rgb[0]=255; g_rgb[1]=t;   g_rgb[2]=0;   break;
+                case 1: g_rgb[0]=q;   g_rgb[1]=255; g_rgb[2]=0;   break;
+                case 2: g_rgb[0]=0;   g_rgb[1]=255; g_rgb[2]=t;   break;
+                case 3: g_rgb[0]=0;   g_rgb[1]=q;   g_rgb[2]=255; break;
+                case 4: g_rgb[0]=t;   g_rgb[1]=0;   g_rgb[2]=255; break;
+                default:g_rgb[0]=255; g_rgb[1]=0;   g_rgb[2]=q;   break;
             }
-            pad_set_lightbar(c, r, g, b);
+            apply_lb();
         }
     }
     if (g_vib_pulse) {
