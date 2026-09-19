@@ -8,7 +8,7 @@
 * go to the release and get the zip file and unzip it
 * make sure to add the bin in the same folder as the python and lua.
 
-* **IOS SetUp**
+**IOS SetUp**
 * Download Pythonica on iOS. And open it to auto create the DOC files, after that just open files in your iPhones and extract the zip folder and take that folder after extracting zip and put it in.. in my phone > pythonica > root > here. And just open pythonica > Files and folders find the folder you got the Lua Sender in and find the python and go to it then run the python..
 
 **Android SetUp**
