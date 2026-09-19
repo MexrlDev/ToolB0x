@@ -1,4 +1,4 @@
- #include "ui.h"
+#include "ui.h"
 #include "font.h"
 
 void ui_clear(u32 *fb, u32 color) {
@@ -24,8 +24,10 @@ void ui_frame(u32 *fb, int x, int y, int w, int h, u32 color, int t) {
 }
 
 void ui_char(u32 *fb, int x, int y, char c, u32 color, int scale) {
-    if (c < 0x20 || c > 0x7F) c = '?';
-    const u8 *g = font8x8[(u8)c - 0x20];
+    u8 ch = (u8)c;
+    if (ch < 0x20 || ch > 0x7F) ch = '?';
+    const u8 *g = font8x8[ch - 0x20];
+
     for (int row = 0; row < 8; row++) {
         u8 bits = g[row];
         for (int col = 0; col < 8; col++) {
