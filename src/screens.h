@@ -56,7 +56,6 @@ void menu_tick   (struct ctx *c);
 void menu_goto   (Screen *s);
 void menu_request_exit(void);
 
-/* custom views */
 void padview_draw   (struct ctx *c, u32 *fb);
 int  padview_input  (struct ctx *c, u32 raw, u32 pressed);
 void debugview_draw (struct ctx *c, u32 *fb);
