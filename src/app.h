@@ -70,11 +70,12 @@ struct ctx {
     void *send_fn, *recv_fn, *sendto_fn, *recvfrom_fn;
     void *close_fn, *setsockopt_fn, *poll_fn, *getsockname_fn;
 
-    /* kernel helpers */
     void *module_info_from_addr;
     void *sys_sw_version;
     void *virtual_query;
     void *mprotect;
+
+    void *ime_init, *ime_get_status, *ime_get_result, *ime_term;
 
     void *vid_open, *vid_close, *vid_reg, *vid_flip, *vid_rate, *vid_evt;
     s32   video_h;
@@ -138,7 +139,6 @@ void dbg_record_press(struct ctx *c, u32 mask);
 int  get_module_info_of_addr(struct ctx *c, u64 addr, struct module_info_simple *out);
 u32  get_fw_version_int(struct ctx *c);
 
-/* memory read helpers used by memview — wrapped to keep the caller honest */
 u8   mem_read8 (struct ctx *c, u64 addr);
 u16  mem_read16(struct ctx *c, u64 addr);
 u32  mem_read32(struct ctx *c, u64 addr);
@@ -147,5 +147,9 @@ void mem_write8 (struct ctx *c, u64 addr, u8 v);
 void mem_write16(struct ctx *c, u64 addr, u16 v);
 void mem_write32(struct ctx *c, u64 addr, u32 v);
 void mem_write64(struct ctx *c, u64 addr, u64 v);
+
+/* try to show an OSK prompt; returns 0 on OK, <0 on failure/cancel */
+int osk_prompt(struct ctx *c, const char *title, const char *initial,
+               char *out_ascii, int out_len, int max_len);
 
 #endif
