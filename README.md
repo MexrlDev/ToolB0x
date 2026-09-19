@@ -22,7 +22,7 @@
 ---
 
 ## Credits
-* Mexrldev
+* Mexrldev - Project, debugging, etc
 
 **Special Thanks To**
   - Egycnq for emuc0re
