@@ -362,6 +362,46 @@ void audio_tone(struct ctx *c, int freq, int ms) {
     }
 }
 
+/* Try to route a test tone through the DualSense speaker.
+ * Attempts several port type values since the exact one varies. */
+int pad_speaker_play(struct ctx *c, int freq, int ms) {
+    if (!c->aud_open || !c->aud_out || !c->aud_close) return -1;
+
+    static const int try_ports[] = { 4, 5, 6, 7, 3, 2 };
+    s32 h = -1;
+    int used_port = -1;
+
+    for (unsigned i = 0; i < sizeof(try_ports)/sizeof(try_ports[0]); i++) {
+        int p = try_ports[i];
+        h = (s32)NC(c->G, c->aud_open, 0xFF, (u64)p, 0,
+                    256, SAMPLE_RATE, AUDIO_S16_STEREO);
+        ulog_num(c, "[toolbox] spk: port ", (u64)p);
+        ulog_num(c, "[toolbox]   h=", (u64)(s32)h);
+        if (h >= 0) { used_port = p; break; }
+    }
+    if (h < 0) return -1;
+
+    static s16 buf[256 * 2];
+    u32 half = (u32)(SAMPLE_RATE / (freq * 2));
+    if (half < 1) half = 1;
+    u32 total = (u32)(SAMPLE_RATE * ms / 1000);
+    u32 done = 0, phase = 0;
+    while (done < total) {
+        u32 n = total - done;
+        if (n > 256) n = 256;
+        for (u32 i = 0; i < n; i++) {
+            s16 s = ((phase / half) & 1) ? -10000 : 10000;
+            buf[i*2] = s;
+            buf[i*2+1] = s;
+            phase++;
+        }
+        NC(c->G, c->aud_out, (u64)h, (u64)buf, 0, 0, 0, 0);
+        done += n;
+    }
+    NC(c->G, c->aud_close, (u64)h, 0, 0, 0, 0, 0);
+    return used_port;
+}
+
 void ctx_cleanup(struct ctx *c) {
     pad_set_vibration(c, 0, 0);
     pad_set_lightbar(c, 0, 0, 200);
@@ -422,105 +462,13 @@ void mem_write32(struct ctx *c, u64 a, u32 v) { (void)c; *(volatile u32*)(u64)a 
 void mem_write64(struct ctx *c, u64 a, u64 v) { (void)c; *(volatile u64*)(u64)a = v; }
 
 /* ============================================================
- * OSK prompt — with sceImeDialogParamInit
- *
- * The SDK requires sceImeDialogParamInit to be called first
- * to populate version/magic fields.  Without it,
- * sceImeDialogInit returns 0x80BC0015 (invalid argument).
- *
- * Result codes (SceImeDialogResult.endstatus):
- *   0 = SCE_IME_DIALOG_RESULT_OK
- *   1 = SCE_IME_DIALOG_RESULT_USER_CANCELED
- *   2 = SCE_IME_DIALOG_RESULT_ABORTED
+ * OSK entry — always uses the in-framebuffer VKB for reliability.
+ * The SDK ImeDialog returns 0x80BC0015 in this environment, so we
+ * skip it entirely.
  * ============================================================ */
-static u16 g_osk_text[128];
-static u16 g_osk_prompt[64];
-static u8  g_osk_param[256];
-
-static void ascii_to_u16(u16 *dst, const char *src, int max) {
-    int i = 0;
-    while (src[i] && i < max - 1) { dst[i] = (u16)(u8)src[i]; i++; }
-    dst[i] = 0;
-}
-
-static int u16_to_ascii(char *dst, const u16 *src, int max) {
-    int i = 0;
-    while (src[i] && i < max - 1) { dst[i] = (char)(src[i] & 0xFF); i++; }
-    dst[i] = 0;
-    return i;
-}
-
 int osk_prompt(struct ctx *c, const char *title, const char *initial,
                char *out_ascii, int out_len, int max_len) {
-    (void)title;
-    if (!c->ime_init || !c->ime_get_status || !c->ime_get_result || !c->ime_term)
-        return -100;
-
-    if (max_len > 120) max_len = 120;
-    ascii_to_u16(g_osk_text,   initial ? initial : "", 128);
-    ascii_to_u16(g_osk_prompt, "Enter text...",         64);
-
-    m_set(g_osk_param, 0, sizeof(g_osk_param));
-
-    /* 1) Ask the SDK to initialise the struct (fills version/reserved) */
-    if (c->ime_param_init) {
-        s32 pr = (s32)NC(c->G, c->ime_param_init, (u64)g_osk_param, 0, 0,0,0,0);
-        ulog_num(c, "[toolbox] osk_param_init ret=", (u64)(u32)pr);
-    } else {
-        ulog(c, "[toolbox] osk: no param_init symbol\n");
-    }
-
-    /* 2) Overwrite only the fields we care about */
-    *(u32*)(g_osk_param + 0x00) = (u32)c->user_id;
-    *(u32*)(g_osk_param + 0x04) = 0;                       /* type = DEFAULT */
-    *(u64*)(g_osk_param + 0x08) = 0;                       /* supportedLanguages */
-    *(u64*)(g_osk_param + 0x10) = 0;                       /* enterLabel */
-    *(u64*)(g_osk_param + 0x18) = (u64)g_osk_text;         /* textBox.text */
-    *(u64*)(g_osk_param + 0x20) = (u64)g_osk_prompt;       /* textBox.placeholder */
-    *(u32*)(g_osk_param + 0x28) = 128;                     /* textBox.length */
-    *(u32*)(g_osk_param + 0x2C) = 0;
-    *(u32*)(g_osk_param + 0x30) = 0;                       /* option */
-    *(u32*)(g_osk_param + 0x34) = 0;                       /* align */
-    *(u32*)(g_osk_param + 0x38) = 0;
-    *(u32*)(g_osk_param + 0x3C) = 0;
-    *(u16*)(g_osk_param + 0x40) = (u16)max_len;            /* maxTextLength */
-    *(u16*)(g_osk_param + 0x42) = 0;                       /* inputMethod */
-    *(u32*)(g_osk_param + 0x44) = 0;                       /* filter */
-    *(u32*)(g_osk_param + 0x48) = 0;
-
-    /* 3) sceImeDialogInit(param, extended) — second arg NULL */
-    s32 r = (s32)NC(c->G, c->ime_init, (u64)g_osk_param, 0, 0,0,0,0);
-    ulog_num(c, "[toolbox] osk_init ret=", (u64)(u32)r);
-    if (r != 0) return -2;
-
-    int timeout_ms = 60000;
-    int waited = 0;
-    for (;;) {
-        s32 st = (s32)NC(c->G, c->ime_get_status, 0,0,0,0,0,0);
-        if (st == 2) break;
-        if (st < 0) {
-            NC(c->G, c->ime_term, 0,0,0,0,0,0);
-            ulog_num(c, "[toolbox] osk_status err=", (u64)(s64)st);
-            return -3;
-        }
-        if (waited >= timeout_ms) {
-            NC(c->G, c->ime_term, 0,0,0,0,0,0);
-            return -4;
-        }
-        NC(c->G, c->usleep, 33333, 0,0,0,0,0);
-        waited += 33;
-    }
-
-    u8 result[64]; m_set(result, 0, 64);
-    NC(c->G, c->ime_get_result, (u64)result, 0,0,0,0,0);
-    u32 end_status = *(u32*)result;   /* 0 = OK */
-
-    NC(c->G, c->ime_term, 0,0,0,0,0,0);
-    ulog_num(c, "[toolbox] osk_end=", (u64)end_status);
-
-    if (end_status != 0) return -5;
-    u16_to_ascii(out_ascii, g_osk_text, out_len);
-    return 0;
+    return vkb_prompt(c, title, initial, out_ascii, out_len, max_len);
 }
 
 /* ============================================================
@@ -559,19 +507,13 @@ int notify_send(struct ctx *c, const char *msg, const char *icon_uri) {
         fd = (s32)NC(c->G, c->kopen, (u64)"/dev/notification",
                      (u64)0x0001, 0, 0, 0, 0);
     }
-    if (fd < 0) {
-        ulog_num(c, "[toolbox] notify open failed ret=", (u64)(s64)fd);
-        return -3;
-    }
+    if (fd < 0) return -3;
 
     s32 w = (s32)NC(c->G, c->kwrite, (u64)fd, (u64)g_notify_buf,
                     (u64)sizeof(g_notify_buf), 0, 0, 0);
     NC(c->G, c->kclose, (u64)fd, 0,0,0,0,0);
 
-    if (w <= 0) {
-        ulog_num(c, "[toolbox] notify write failed ret=", (u64)(s64)w);
-        return -4;
-    }
+    if (w <= 0) return -4;
     ulog(c, "[toolbox] notify sent\n");
     return 0;
 }
