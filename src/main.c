@@ -29,9 +29,7 @@ static int do_relocations(u64 load_base) {
 static volatile int g_exit_now = 0;
 void menu_request_exit(void) { g_exit_now = 1; }
 
-/* Bump this string every time you touch the C code.  If the UDP log
- * does NOT show this exact tag, you are running a stale .bin. */
-#define TOOLBOX_BUILD_TAG  "[toolbox] BUILD v4-ds-masks (2025)\n"
+#define TOOLBOX_BUILD_TAG  "[toolbox] BUILD v5-debug-mega (2025)\n"
 
 __attribute__((section(".text._start")))
 void _start(u64 eboot_base, u64 dlsym_addr, struct ext_args *ext) {
@@ -59,6 +57,7 @@ void _start(u64 eboot_base, u64 dlsym_addr, struct ext_args *ext) {
 
     pad_set_lightbar(&G_CTX, 0, 160, 255);
     pad_set_vibration(&G_CTX, 0, 0);
+    pad_set_trigger_all_off(&G_CTX);
 
     ext->step = 6;
     menu_init();
@@ -68,21 +67,67 @@ void _start(u64 eboot_base, u64 dlsym_addr, struct ext_args *ext) {
     static u32 retry_tick = 0;
 
     while (!g_exit_now) {
+        u64 t0 = get_uptime_ms(&G_CTX);
+
         u32 raw     = pad_raw(&G_CTX);
         u32 pressed = raw & ~G_CTX.pad_prev;
         G_CTX.pad_prev = raw;
 
-        if (pressed) ulog_num(&G_CTX, "[toolbox] press mask=", (u64)pressed);
-        if (++dbg_tick >= 60) { dbg_tick = 0; ulog_num(&G_CTX, "[toolbox] raw=", (u64)raw); }
-        if (G_CTX.pad_h < 0 && ++retry_tick >= 120) { retry_tick = 0; ctx_pad_retry(&G_CTX); }
+        if (pressed) {
+            dbg_record_press(&G_CTX, pressed);
+            ulog_num(&G_CTX, "[toolbox] press mask=", (u64)pressed);
+        }
+        if (++dbg_tick >= 300) {
+            dbg_tick = 0;
+            ulog_num(&G_CTX, "[toolbox] raw=", (u64)raw);
+        }
+        if (G_CTX.pad_h < 0 && ++retry_tick >= 120) {
+            retry_tick = 0;
+            ctx_pad_retry(&G_CTX);
+        }
 
         if (raw & DS_R1) { ulog(&G_CTX, "[toolbox] R1 exit\n"); break; }
 
+        /* ---- Draw ---- */
+        u64 t_draw_start = get_uptime_ms(&G_CTX);
         menu_input(&G_CTX, raw, pressed);
-
         menu_tick(&G_CTX);
         menu_draw(&G_CTX, G_CTX.fbs[G_CTX.active]);
+        u64 t_draw_end = get_uptime_ms(&G_CTX);
+
+        /* ---- Flip (may wait on vsync) ---- */
         video_flip(&G_CTX, 1);
+        u64 t_flip_end = get_uptime_ms(&G_CTX);
+
+        /* ---- Record timing ---- */
+        u32 draw_ms = (u32)(t_draw_end - t_draw_start);
+        u32 flip_ms = (u32)(t_flip_end - t_draw_end);
+        u32 frame_ms = (u32)(t_flip_end - t0);
+
+        G_CTX.dbg.draw_time_ms  = draw_ms;
+        G_CTX.dbg.flip_time_ms  = flip_ms;
+        G_CTX.dbg.frame_time_ms = frame_ms;
+        if (frame_ms < G_CTX.dbg.frame_time_min) G_CTX.dbg.frame_time_min = frame_ms;
+        if (frame_ms > G_CTX.dbg.frame_time_max) G_CTX.dbg.frame_time_max = frame_ms;
+        G_CTX.dbg.frame_time_sum += frame_ms;
+        G_CTX.dbg.frame_time_n++;
+
+        G_CTX.dbg.fps_frames++;
+        if (t_flip_end - G_CTX.dbg.fps_last_ms >= 1000) {
+            G_CTX.dbg.fps = G_CTX.dbg.fps_frames * 1000
+                          / (u32)(t_flip_end - G_CTX.dbg.fps_last_ms);
+            G_CTX.dbg.fps_frames  = 0;
+            G_CTX.dbg.fps_last_ms = t_flip_end;
+        }
+
+        /* Update "ago" for last press */
+        if (G_CTX.dbg.pad_presses) {
+            G_CTX.dbg.last_press_ago_ms = (u32)(t_flip_end - t0)
+                + G_CTX.dbg.last_press_ago_ms;
+            if (G_CTX.dbg.last_press_ago_ms > 60000)
+                G_CTX.dbg.last_press_ago_ms = 60000;
+        }
+
         if (G_CTX.ext) G_CTX.ext->frame_count = G_CTX.total_frames;
     }
 
