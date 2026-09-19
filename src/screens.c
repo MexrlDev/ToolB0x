@@ -368,6 +368,41 @@ static Item scr_notify_items[] = {
     { .label = "Back",                 .kind = ITEM_BACK },
 };
 
+/* ============ OPTICAL DRIVE ============ */
+static void eject_notify_result(int r, const char *ok_msg, const char *generic_fail) {
+    if (r == 0) {
+        notify_send(&G_CTX, ok_msg, 0);
+    } else if (r == -1) {
+        notify_send(&G_CTX, "No optical drive found.", 0);
+    } else if (r == -3) {
+        notify_send(&G_CTX, "ioctl unavailable.", 0);
+    } else {
+        notify_send(&G_CTX, generic_fail, 0);
+    }
+}
+
+static void act_eject_open(Item *it) {
+    (void)it;
+    int r = eject_disc(&G_CTX);
+    eject_notify_result(r, "Disc ejected.", "Eject failed.");
+}
+
+static void act_eject_close(Item *it) {
+    (void)it;
+    int r = eject_close(&G_CTX);
+    eject_notify_result(r, "Tray closed.", "Reload failed.");
+}
+
+static Item scr_disc_items[] = {
+    { .label = "Optical Drive", .kind = ITEM_HEADER },
+    { .label = "Eject Disc",     .kind = ITEM_ACTION, .on_confirm = act_eject_open  },
+    { .label = "Reload / Close", .kind = ITEM_ACTION, .on_confirm = act_eject_close },
+    { .label = "Notes", .kind = ITEM_HEADER },
+    { .label = "Only works when a", .kind = ITEM_INFO, .info = "disc is inserted." },
+    { .label = "Uses FreeBSD CDIO", .kind = ITEM_INFO, .info = "ioctl via /dev/cd0." },
+    { .label = "Back", .kind = ITEM_BACK },
+};
+
 /* ============ MAIN ============ */
 static void act_exit(Item *it) { (void)it; menu_request_exit(); }
 
@@ -376,6 +411,7 @@ static Item scr_main_items[] = {
     { .label = "Controller",       .kind = ITEM_SUBMENU, .submenu = &scr_controller },
     { .label = "System Info",      .kind = ITEM_SUBMENU, .submenu = &scr_system   },
     { .label = "Notifications",    .kind = ITEM_SUBMENU, .submenu = &scr_notify   },
+    { .label = "Optical Drive",    .kind = ITEM_SUBMENU, .submenu = &scr_disc     },
     { .label = "Memory Editor",    .kind = ITEM_SUBMENU, .submenu = &scr_memview  },
     { .label = "Modules & Kernel", .kind = ITEM_SUBMENU, .submenu = &scr_modview  },
     { .label = "Video",            .kind = ITEM_SUBMENU, .submenu = &scr_video    },
@@ -400,6 +436,7 @@ Screen scr_video        = { .title="Video",           .items=scr_video_items,   
 Screen scr_audio        = { .title="Audio",           .items=scr_audio_items,        .count=CNT(scr_audio_items),        .visible=8,  .parent=&scr_main };
 Screen scr_network      = { .title="Network",         .items=scr_network_items,      .count=CNT(scr_network_items),      .visible=8,  .parent=&scr_main };
 Screen scr_notify       = { .title="Notifications",   .items=scr_notify_items,       .count=CNT(scr_notify_items),       .visible=8,  .parent=&scr_main };
+Screen scr_disc         = { .title="Optical Drive",   .items=scr_disc_items,         .count=CNT(scr_disc_items),         .visible=8,  .parent=&scr_main };
 Screen scr_debug        = { .title="Debug Panel",     .parent=&scr_main, .custom_draw = debugview_draw, .custom_input = debugview_input };
 Screen scr_memview      = { .title="Memory Editor",   .parent=&scr_main, .custom_draw = memview_draw,   .custom_input = memview_input };
 Screen scr_modview      = { .title="Modules & Kernel",.parent=&scr_main, .custom_draw = modview_draw,   .custom_input = modview_input };
@@ -410,7 +447,7 @@ void menu_init(void) {
     Screen *all[] = {
         &scr_main, &scr_controller, &scr_lightbar, &scr_lightbar_rgb,
         &scr_vib, &scr_trig, &scr_pad, &scr_system, &scr_video,
-        &scr_audio, &scr_network, &scr_notify, &scr_debug,
+        &scr_audio, &scr_network, &scr_notify, &scr_disc, &scr_debug,
         &scr_memview, &scr_modview
     };
     for (unsigned i = 0; i < sizeof(all) / sizeof(all[0]); i++) {
