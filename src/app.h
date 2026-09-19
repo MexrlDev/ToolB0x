@@ -150,7 +150,12 @@ void mem_write16(struct ctx *c, u64 addr, u16 v);
 void mem_write32(struct ctx *c, u64 addr, u32 v);
 void mem_write64(struct ctx *c, u64 addr, u64 v);
 
+/* OSK entry — tries SDK, falls back to in-framebuffer VKB */
 int osk_prompt(struct ctx *c, const char *title, const char *initial,
+               char *out_ascii, int out_len, int max_len);
+
+/* In-framebuffer virtual keyboard (always works) */
+int vkb_prompt(struct ctx *c, const char *title, const char *initial,
                char *out_ascii, int out_len, int max_len);
 
 int notify_send(struct ctx *c, const char *msg, const char *icon_uri);
@@ -160,5 +165,8 @@ int  eject_close(struct ctx *c);
 const char *eject_last_device(void);
 void eject_reset(void);
 void eject_dump_dev(struct ctx *c);
+
+/* DualSense speaker test — returns port type used, or -1 on failure */
+int pad_speaker_play(struct ctx *c, int freq, int ms);
 
 #endif
