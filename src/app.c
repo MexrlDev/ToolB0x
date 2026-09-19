@@ -52,7 +52,6 @@ void ctx_init(struct ctx *c, u64 eboot_base, u64 dlsym_addr, struct ext_args *ex
     c->virtual_query         = SYM(G, D, LIBKERNEL_HANDLE, "sceKernelVirtualQuery");
     c->mprotect              = SYM(G, D, LIBKERNEL_HANDLE, "sceKernelMprotect");
 
-    /* Try to load IME dialog library */
     s32 ime = (s32)NC(G, c->load_mod, (u64)"libSceImeDialog.sprx", 0,0,0,0,0);
     if (ime > 0) {
         c->ime_init       = SYM(G, D, ime, "sceImeDialogInit");
@@ -378,30 +377,54 @@ void ctx_cleanup(struct ctx *c) {
         NC(c->G, c->delete_eq, c->eq, 0,0,0,0,0);
 }
 
+/* ------------------------------------------------------------
+ * Module info lookup.
+ *
+ * IMPORTANT: the SceKernelModuleInfo struct is well over 0x100
+ * bytes and its exact size varies by firmware.  We use a large
+ * STATIC buffer (never on stack) so the kernel can't overflow
+ * our stack frame even if it writes 2 KB.  Size field is a
+ * size_t (u64 on x86-64).
+ * ------------------------------------------------------------ */
+static u8 g_modinfo_buf[0x800];
+
 int get_module_info_of_addr(struct ctx *c, u64 addr, struct module_info_simple *out) {
     m_set(out, 0, sizeof(*out));
     if (!c->module_info_from_addr) return -1;
-    u8 buf[0x200];
-    m_set(buf, 0, sizeof(buf));
-    *(u32*)buf = 0x200;
-    s32 r = (s32)NC(c->G, c->module_info_from_addr, addr, 1, (u64)buf, 0,0,0);
+    m_set(g_modinfo_buf, 0, sizeof(g_modinfo_buf));
+    *(u64*)g_modinfo_buf = (u64)sizeof(g_modinfo_buf);
+
+    s32 r = (s32)NC(c->G, c->module_info_from_addr,
+                    addr, 1, (u64)g_modinfo_buf, 0, 0, 0);
     if (r != 0) return r;
+
+    /* name at +0x08, null-terminated up to 32 chars */
     for (int i = 0; i < 31; i++) {
-        char ch = (char)buf[0x08 + i];
+        char ch = (char)g_modinfo_buf[0x08 + i];
         out->name[i] = ch;
         if (!ch) break;
     }
     out->name[31] = 0;
-    out->base  = *(u64*)(buf + 0x160);
+    /* first segment base at +0x160 */
+    out->base  = *(u64*)(g_modinfo_buf + 0x160);
     out->valid = 1;
     return 0;
 }
 
+/* ------------------------------------------------------------
+ * Firmware version.
+ *
+ * Same story — SceKernelSwVersion is a fixed struct but I had
+ * it as 16 bytes on stack before which corrupted the stack.
+ * Use a big static buffer, never on stack.
+ * ------------------------------------------------------------ */
+static u8 g_swver_buf[0x200];
+
 u32 get_fw_version_int(struct ctx *c) {
     if (!c->sys_sw_version) return 0;
-    u32 v[4] = {0,0,0,0};
-    (void)(s32)NC(c->G, c->sys_sw_version, (u64)v, 0,0,0,0,0);
-    return v[0];
+    m_set(g_swver_buf, 0, sizeof(g_swver_buf));
+    (void)(s32)NC(c->G, c->sys_sw_version, (u64)g_swver_buf, 0,0,0,0,0);
+    return *(u32*)g_swver_buf;
 }
 
 u8  mem_read8 (struct ctx *c, u64 a) { (void)c; return *(volatile u8 *)(u64)a; }
@@ -414,8 +437,7 @@ void mem_write32(struct ctx *c, u64 a, u32 v) { (void)c; *(volatile u32*)(u64)a 
 void mem_write64(struct ctx *c, u64 a, u64 v) { (void)c; *(volatile u64*)(u64)a = v; }
 
 /* ------------------------------------------------------------
- * OSK prompt via sceImeDialog.
- * Returns 0 on OK (out_ascii filled), <0 on failure/cancel.
+ * OSK prompt
  * ------------------------------------------------------------ */
 static u16 g_osk_text[128];
 static u16 g_osk_prompt[64];
@@ -446,27 +468,6 @@ int osk_prompt(struct ctx *c, const char *title, const char *initial,
     u8 param[256];
     m_set(param, 0, 256);
 
-    /* SceImeDialogParam layout (PS5 SDK, 120 bytes):
-     *   0x00 u32 userId
-     *   0x04 u32 type (0=DEFAULT)
-     *   0x08 u64 supportedLanguages
-     *   0x10 ptr enterLabel (u16*)
-     *   0x18 ptr textBox.text       <-- input/output buffer
-     *   0x20 ptr textBox.placeholder
-     *   0x28 u32 textBox.length
-     *   0x2C u32 textBox.reserved
-     *   0x30 u32 option.option
-     *   0x34 u32 option.align
-     *   0x38 i32 option.posx
-     *   0x3C i32 option.posy
-     *   0x40 u16 maxTextLength
-     *   0x42 u16 inputMethod
-     *   0x44 u32 filter
-     *   0x48 u32 option2
-     *   0x50 u64 reserved[2]
-     *   0x60 ptr padInfo
-     *   0x68 u32 extKeyboardMode
-     */
     *(u32*)(param + 0x00) = (u32)c->user_id;
     *(u32*)(param + 0x04) = 0;
     *(u64*)(param + 0x08) = 0;
@@ -492,7 +493,7 @@ int osk_prompt(struct ctx *c, const char *title, const char *initial,
     int waited = 0;
     for (;;) {
         s32 st = (s32)NC(c->G, c->ime_get_status, 0,0,0,0,0,0);
-        if (st == 2) break;   /* FINISHED */
+        if (st == 2) break;
         if (st < 0) {
             NC(c->G, c->ime_term, 0,0,0,0,0,0);
             ulog_num(c, "[toolbox] osk_status err=", (u64)(s64)st);
