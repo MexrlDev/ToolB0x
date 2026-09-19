@@ -403,6 +403,17 @@ static Item scr_disc_items[] = {
     { .label = "Back", .kind = ITEM_BACK },
 };
 
+/* ============ CREDITS ============ */
+static Item scr_credits_items[] = {
+    { .label = "Credits",                            .kind = ITEM_INFO },
+    { .label = "MexrlDev - Development & Debugging", .kind = ITEM_INFO },
+    { .label = "",                                   .kind = ITEM_HEADER },
+    { .label = "Special Thanks To",                  .kind = ITEM_INFO },
+    { .label = "Egycnq for Emuc0re Researches",      .kind = ITEM_INFO },
+    { .label = "Gezine for LuaC0re",                 .kind = ITEM_INFO },
+    { .label = "Back",                               .kind = ITEM_BACK },
+};
+
 /* ============ MAIN ============ */
 static void act_exit(Item *it) { (void)it; menu_request_exit(); }
 
@@ -418,6 +429,7 @@ static Item scr_main_items[] = {
     { .label = "Audio",            .kind = ITEM_SUBMENU, .submenu = &scr_audio    },
     { .label = "Network",          .kind = ITEM_SUBMENU, .submenu = &scr_network  },
     { .label = "Debug Panel",      .kind = ITEM_SUBMENU, .submenu = &scr_debug    },
+    { .label = "Credits",          .kind = ITEM_SUBMENU, .submenu = &scr_credits  },
     { .label = "",                 .kind = ITEM_HEADER },
     { .label = "Exit (R1 on main)", .kind = ITEM_ACTION, .on_confirm = act_exit },
 };
@@ -437,6 +449,7 @@ Screen scr_audio        = { .title="Audio",           .items=scr_audio_items,   
 Screen scr_network      = { .title="Network",         .items=scr_network_items,      .count=CNT(scr_network_items),      .visible=8,  .parent=&scr_main };
 Screen scr_notify       = { .title="Notifications",   .items=scr_notify_items,       .count=CNT(scr_notify_items),       .visible=8,  .parent=&scr_main };
 Screen scr_disc         = { .title="Optical Drive",   .items=scr_disc_items,         .count=CNT(scr_disc_items),         .visible=8,  .parent=&scr_main };
+Screen scr_credits      = { .title="Credits",         .items=scr_credits_items,      .count=CNT(scr_credits_items),      .visible=8,  .parent=&scr_main };
 Screen scr_debug        = { .title="Debug Panel",     .parent=&scr_main, .custom_draw = debugview_draw, .custom_input = debugview_input };
 Screen scr_memview      = { .title="Memory Editor",   .parent=&scr_main, .custom_draw = memview_draw,   .custom_input = memview_input };
 Screen scr_modview      = { .title="Modules & Kernel",.parent=&scr_main, .custom_draw = modview_draw,   .custom_input = modview_input };
@@ -447,8 +460,8 @@ void menu_init(void) {
     Screen *all[] = {
         &scr_main, &scr_controller, &scr_lightbar, &scr_lightbar_rgb,
         &scr_vib, &scr_trig, &scr_pad, &scr_system, &scr_video,
-        &scr_audio, &scr_network, &scr_notify, &scr_disc, &scr_debug,
-        &scr_memview, &scr_modview
+        &scr_audio, &scr_network, &scr_notify, &scr_disc, &scr_credits,
+        &scr_debug, &scr_memview, &scr_modview
     };
     for (unsigned i = 0; i < sizeof(all) / sizeof(all[0]); i++) {
         all[i]->cursor = 0;
