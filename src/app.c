@@ -3,6 +3,9 @@
 
 struct ctx G_CTX;
 
+/* ============================================================
+ * Init
+ * ============================================================ */
 void ctx_init(struct ctx *c, u64 eboot_base, u64 dlsym_addr, struct ext_args *ext) {
     m_set(c, 0, sizeof(*c));
     c->eboot_base = eboot_base;
@@ -377,15 +380,9 @@ void ctx_cleanup(struct ctx *c) {
         NC(c->G, c->delete_eq, c->eq, 0,0,0,0,0);
 }
 
-/* ------------------------------------------------------------
- * Module info lookup.
- *
- * IMPORTANT: the SceKernelModuleInfo struct is well over 0x100
- * bytes and its exact size varies by firmware.  We use a large
- * STATIC buffer (never on stack) so the kernel can't overflow
- * our stack frame even if it writes 2 KB.  Size field is a
- * size_t (u64 on x86-64).
- * ------------------------------------------------------------ */
+/* ============================================================
+ * Module info (static buffer, never on stack)
+ * ============================================================ */
 static u8 g_modinfo_buf[0x800];
 
 int get_module_info_of_addr(struct ctx *c, u64 addr, struct module_info_simple *out) {
@@ -398,26 +395,17 @@ int get_module_info_of_addr(struct ctx *c, u64 addr, struct module_info_simple *
                     addr, 1, (u64)g_modinfo_buf, 0, 0, 0);
     if (r != 0) return r;
 
-    /* name at +0x08, null-terminated up to 32 chars */
     for (int i = 0; i < 31; i++) {
         char ch = (char)g_modinfo_buf[0x08 + i];
         out->name[i] = ch;
         if (!ch) break;
     }
     out->name[31] = 0;
-    /* first segment base at +0x160 */
     out->base  = *(u64*)(g_modinfo_buf + 0x160);
     out->valid = 1;
     return 0;
 }
 
-/* ------------------------------------------------------------
- * Firmware version.
- *
- * Same story — SceKernelSwVersion is a fixed struct but I had
- * it as 16 bytes on stack before which corrupted the stack.
- * Use a big static buffer, never on stack.
- * ------------------------------------------------------------ */
 static u8 g_swver_buf[0x200];
 
 u32 get_fw_version_int(struct ctx *c) {
@@ -436,9 +424,9 @@ void mem_write16(struct ctx *c, u64 a, u16 v) { (void)c; *(volatile u16*)(u64)a 
 void mem_write32(struct ctx *c, u64 a, u32 v) { (void)c; *(volatile u32*)(u64)a = v; }
 void mem_write64(struct ctx *c, u64 a, u64 v) { (void)c; *(volatile u64*)(u64)a = v; }
 
-/* ------------------------------------------------------------
+/* ============================================================
  * OSK prompt
- * ------------------------------------------------------------ */
+ * ============================================================ */
 static u16 g_osk_text[128];
 static u16 g_osk_prompt[64];
 
@@ -516,5 +504,71 @@ int osk_prompt(struct ctx *c, const char *title, const char *initial,
 
     if (end_status != 1) return -5;
     u16_to_ascii(out_ascii, g_osk_text, out_len);
+    return 0;
+}
+
+/* ============================================================
+ * System notification
+ *
+ * Writes a 0xC30-byte struct to /dev/notification0 (identical on
+ * PS4 and PS5 — same FreeBSD-derived kernel interface).
+ *
+ * Layout (mirrors LuaC0re's send_notification):
+ *   0x00 u32 type           (0 = standard info popup)
+ *   0x10 s32 target_id      (-1 = broadcast to active user)
+ *   0x28 u32 unk3
+ *   0x2C u32 use_icon_uri   (1 = read icon at 0x42D)
+ *   0x2D char message[1024]
+ *   0x42D char icon_uri[1024]
+ * ============================================================ */
+static u8 g_notify_buf[0xC30];
+
+int notify_send(struct ctx *c, const char *msg, const char *icon_uri) {
+    if (!msg) return -1;
+    if (!c->kopen || !c->kwrite || !c->kclose) return -2;
+
+    int mlen = s_len(msg);
+    if (mlen > 1023) mlen = 1023;
+
+    int ilen = icon_uri ? s_len(icon_uri) : 0;
+    if (ilen > 1023) ilen = 1023;
+
+    m_set(g_notify_buf, 0, sizeof(g_notify_buf));
+
+    *(u32*)(g_notify_buf + 0x00) = 0;            /* type = normal */
+    *(u32*)(g_notify_buf + 0x10) = 0xFFFFFFFF;   /* target_id = -1 (any user) */
+    *(u32*)(g_notify_buf + 0x28) = 0;
+    *(u32*)(g_notify_buf + 0x2C) = 1;            /* use_icon_image_uri */
+
+    for (int i = 0; i < mlen; i++)
+        g_notify_buf[0x2D + i] = (u8)msg[i];
+    g_notify_buf[0x2D + mlen] = 0;
+
+    if (icon_uri && ilen > 0) {
+        for (int i = 0; i < ilen; i++)
+            g_notify_buf[0x42D + i] = (u8)icon_uri[i];
+        g_notify_buf[0x42D + ilen] = 0;
+    }
+
+    s32 fd = (s32)NC(c->G, c->kopen, (u64)"/dev/notification0",
+                     (u64)0x0001 /* O_WRONLY */, 0, 0, 0, 0);
+    if (fd < 0) {
+        fd = (s32)NC(c->G, c->kopen, (u64)"/dev/notification",
+                     (u64)0x0001, 0, 0, 0, 0);
+    }
+    if (fd < 0) {
+        ulog_num(c, "[toolbox] notify open failed ret=", (u64)(s64)fd);
+        return -3;
+    }
+
+    s32 w = (s32)NC(c->G, c->kwrite, (u64)fd, (u64)g_notify_buf,
+                    (u64)sizeof(g_notify_buf), 0, 0, 0);
+    NC(c->G, c->kclose, (u64)fd, 0,0,0,0,0);
+
+    if (w <= 0) {
+        ulog_num(c, "[toolbox] notify write failed ret=", (u64)(s64)w);
+        return -4;
+    }
+    ulog(c, "[toolbox] notify sent\n");
     return 0;
 }
