@@ -29,7 +29,7 @@ static int do_relocations(u64 load_base) {
 static volatile int g_exit_now = 0;
 void menu_request_exit(void) { g_exit_now = 1; }
 
-#define TOOLBOX_BUILD_TAG  "[toolbox] BUILD v5-debug-mega (2025)\n"
+#define TOOLBOX_BUILD_TAG  "[toolbox] BUILD v6-kernel-mem (2025)\n"
 
 __attribute__((section(".text._start")))
 void _start(u64 eboot_base, u64 dlsym_addr, struct ext_args *ext) {
@@ -71,13 +71,12 @@ void _start(u64 eboot_base, u64 dlsym_addr, struct ext_args *ext) {
 
         u32 raw     = pad_raw(&G_CTX);
         u32 pressed = raw & ~G_CTX.pad_prev;
-        G_CTX.pad_prev = raw;
 
         if (pressed) {
             dbg_record_press(&G_CTX, pressed);
-            ulog_num(&G_CTX, "[toolbox] press mask=", (u64)pressed);
+            ulog_num(&G_CTX, "[toolbox] press=", (u64)pressed);
         }
-        if (++dbg_tick >= 300) {
+        if (++dbg_tick >= 600) {
             dbg_tick = 0;
             ulog_num(&G_CTX, "[toolbox] raw=", (u64)raw);
         }
@@ -86,7 +85,24 @@ void _start(u64 eboot_base, u64 dlsym_addr, struct ext_args *ext) {
             ctx_pad_retry(&G_CTX);
         }
 
-        if (raw & DS_R1) { ulog(&G_CTX, "[toolbox] R1 exit\n"); break; }
+        /* ---- L1 + R1 escape hatch: force back to main menu ---- */
+        int on_main = (g_screen == &scr_main);
+        if (!on_main && (raw & (DS_L1 | DS_R1)) == (DS_L1 | DS_R1)) {
+            menu_goto(&scr_main);
+            G_CTX.pad_prev = raw;   /* consume the edge so R1 release doesn't fire */
+            ulog(&G_CTX, "[toolbox] L1+R1 -> main\n");
+            menu_draw(&G_CTX, G_CTX.fbs[G_CTX.active]);
+            video_flip(&G_CTX, 1);
+            continue;
+        }
+
+        /* ---- R1 = exit ONLY on main menu ---- */
+        if (on_main && (pressed & DS_R1)) {
+            ulog(&G_CTX, "[toolbox] R1 exit (main menu)\n");
+            break;
+        }
+
+        G_CTX.pad_prev = raw;
 
         /* ---- Draw ---- */
         u64 t_draw_start = get_uptime_ms(&G_CTX);
@@ -95,11 +111,9 @@ void _start(u64 eboot_base, u64 dlsym_addr, struct ext_args *ext) {
         menu_draw(&G_CTX, G_CTX.fbs[G_CTX.active]);
         u64 t_draw_end = get_uptime_ms(&G_CTX);
 
-        /* ---- Flip (may wait on vsync) ---- */
         video_flip(&G_CTX, 1);
         u64 t_flip_end = get_uptime_ms(&G_CTX);
 
-        /* ---- Record timing ---- */
         u32 draw_ms = (u32)(t_draw_end - t_draw_start);
         u32 flip_ms = (u32)(t_flip_end - t_draw_end);
         u32 frame_ms = (u32)(t_flip_end - t0);
@@ -119,8 +133,6 @@ void _start(u64 eboot_base, u64 dlsym_addr, struct ext_args *ext) {
             G_CTX.dbg.fps_frames  = 0;
             G_CTX.dbg.fps_last_ms = t_flip_end;
         }
-
-        /* Update "ago" for last press */
         if (G_CTX.dbg.pad_presses) {
             G_CTX.dbg.last_press_ago_ms = (u32)(t_flip_end - t0)
                 + G_CTX.dbg.last_press_ago_ms;
@@ -133,7 +145,6 @@ void _start(u64 eboot_base, u64 dlsym_addr, struct ext_args *ext) {
 
     ctx_cleanup(&G_CTX);
     ulog(&G_CTX, "[toolbox] clean exit\n");
-
     ext->status = 0;
     ext->step = 99;
     ext->frame_count = G_CTX.total_frames;
