@@ -1,7 +1,6 @@
 #include "screens.h"
 #include "ui.h"
 
-/* ---- palette ---- */
 #define COL_BG       RGB(8,8,14)
 #define COL_PANEL    RGB(20,20,28)
 #define COL_BORDER   RGB(70,70,95)
@@ -15,19 +14,16 @@
 
 Screen *g_screen;
 
-/* ============ shared state ============ */
 static int  g_rgb[3]  = {255, 100, 0};
 static int  g_vib_l   = 128, g_vib_s = 128;
-static int  g_lb_mode = 0;          /* 0=static 1=rainbow */
+static int  g_lb_mode = 0;
 static int  g_lb_hue  = 0;
 static int  g_vib_pulse = 0;
 static int  g_vib_phase = 0;
-static u32  g_pad_snapshot = 0;
 
 static char g_local_ip[20] = "unknown";
 static int  g_local_ip_valid = 0;
 
-/* ============ helpers ============ */
 static void set_lb_from_rgb(void) {
     pad_set_lightbar(&G_CTX, (u8)g_rgb[0], (u8)g_rgb[1], (u8)g_rgb[2]);
 }
@@ -114,104 +110,61 @@ static Item scr_vib_items[] = {
     { .label = "Back",        .kind = ITEM_BACK },
 };
 
-/* ============ TRIGGERS ============ */
-static void trig_preset(Item *it) {
-    int mode = (int)((it->data >> 24) & 0xFF);
-    int p1   = (int)((it->data >> 16) & 0xFF);
-    int p2   = (int)((it->data >> 8)  & 0xFF);
-    int p3   = (int)( it->data        & 0xFF);
-    pad_set_trigger(&G_CTX, mode, 2, p1, p2, p3);
-}
-static void trig_off(Item *it) { (void)it; pad_set_trigger(&G_CTX, 0, 2, 0, 0, 0); }
+/* ============ TRIGGERS (now with correct struct + L/R tests) ============ */
+static void trig_do_off(Item *it) { (void)it; pad_set_trigger_all_off(&G_CTX); }
+
+static void trig_fb_L_weak  (Item *it) { (void)it; pad_set_trigger_feedback(&G_CTX, TRIG_L2, 5, 3); }
+static void trig_fb_L_med   (Item *it) { (void)it; pad_set_trigger_feedback(&G_CTX, TRIG_L2, 5, 5); }
+static void trig_fb_L_strong(Item *it) { (void)it; pad_set_trigger_feedback(&G_CTX, TRIG_L2, 5, 8); }
+static void trig_fb_R_weak  (Item *it) { (void)it; pad_set_trigger_feedback(&G_CTX, TRIG_R2, 5, 3); }
+static void trig_fb_R_med   (Item *it) { (void)it; pad_set_trigger_feedback(&G_CTX, TRIG_R2, 5, 5); }
+static void trig_fb_R_strong(Item *it) { (void)it; pad_set_trigger_feedback(&G_CTX, TRIG_R2, 5, 8); }
+static void trig_fb_both    (Item *it) { (void)it; pad_set_trigger_feedback(&G_CTX, TRIG_BOTH, 5, 5); }
+
+static void trig_weap_L (Item *it) { (void)it; pad_set_trigger_weapon(&G_CTX, TRIG_L2, 2, 6, 8); }
+static void trig_weap_R (Item *it) { (void)it; pad_set_trigger_weapon(&G_CTX, TRIG_R2, 2, 6, 8); }
+static void trig_weap_both(Item *it) { (void)it; pad_set_trigger_weapon(&G_CTX, TRIG_BOTH, 2, 6, 8); }
+
+static void trig_vib_L (Item *it) { (void)it; pad_set_trigger_vibrate(&G_CTX, TRIG_L2, 5, 6, 40); }
+static void trig_vib_R (Item *it) { (void)it; pad_set_trigger_vibrate(&G_CTX, TRIG_R2, 5, 6, 40); }
+static void trig_vib_both(Item *it) { (void)it; pad_set_trigger_vibrate(&G_CTX, TRIG_BOTH, 5, 6, 40); }
+
+static void trig_slope_L (Item *it) { (void)it; pad_set_trigger_slope(&G_CTX, TRIG_L2, 2, 7, 1, 8); }
+static void trig_slope_R (Item *it) { (void)it; pad_set_trigger_slope(&G_CTX, TRIG_R2, 2, 7, 1, 8); }
+static void trig_slope_both(Item *it) { (void)it; pad_set_trigger_slope(&G_CTX, TRIG_BOTH, 2, 7, 1, 8); }
 
 static Item scr_trig_items[] = {
     { .label = "Trigger Effects", .kind = ITEM_HEADER },
-    { .label = "Off",             .kind = ITEM_ACTION, .on_confirm = trig_off },
-    { .label = "Feedback Weak",   .kind = ITEM_ACTION, .on_confirm = trig_preset, .data = 0x010201 },
-    { .label = "Feedback Medium", .kind = ITEM_ACTION, .on_confirm = trig_preset, .data = 0x010405 },
-    { .label = "Feedback Strong", .kind = ITEM_ACTION, .on_confirm = trig_preset, .data = 0x010608 },
-    { .label = "Weapon",          .kind = ITEM_ACTION, .on_confirm = trig_preset, .data = 0x020508 },
-    { .label = "Vibration",       .kind = ITEM_ACTION, .on_confirm = trig_preset, .data = 0x030305 },
-    { .label = "Back",            .kind = ITEM_BACK },
+    { .label = "Turn Both Off",     .kind = ITEM_ACTION, .on_confirm = trig_do_off },
+
+    { .label = "Feedback",          .kind = ITEM_HEADER },
+    { .label = "L2 Weak",           .kind = ITEM_ACTION, .on_confirm = trig_fb_L_weak   },
+    { .label = "L2 Medium",         .kind = ITEM_ACTION, .on_confirm = trig_fb_L_med    },
+    { .label = "L2 Strong",         .kind = ITEM_ACTION, .on_confirm = trig_fb_L_strong },
+    { .label = "R2 Weak",           .kind = ITEM_ACTION, .on_confirm = trig_fb_R_weak   },
+    { .label = "R2 Medium",         .kind = ITEM_ACTION, .on_confirm = trig_fb_R_med    },
+    { .label = "R2 Strong",         .kind = ITEM_ACTION, .on_confirm = trig_fb_R_strong },
+    { .label = "Both Medium",       .kind = ITEM_ACTION, .on_confirm = trig_fb_both     },
+
+    { .label = "Weapon",            .kind = ITEM_HEADER },
+    { .label = "L2 Weapon",         .kind = ITEM_ACTION, .on_confirm = trig_weap_L      },
+    { .label = "R2 Weapon",         .kind = ITEM_ACTION, .on_confirm = trig_weap_R      },
+    { .label = "Both Weapon",       .kind = ITEM_ACTION, .on_confirm = trig_weap_both   },
+
+    { .label = "Vibration",         .kind = ITEM_HEADER },
+    { .label = "L2 Vibrate",        .kind = ITEM_ACTION, .on_confirm = trig_vib_L       },
+    { .label = "R2 Vibrate",        .kind = ITEM_ACTION, .on_confirm = trig_vib_R       },
+    { .label = "Both Vibrate",      .kind = ITEM_ACTION, .on_confirm = trig_vib_both    },
+
+    { .label = "Slope Feedback",    .kind = ITEM_HEADER },
+    { .label = "L2 Slope",          .kind = ITEM_ACTION, .on_confirm = trig_slope_L     },
+    { .label = "R2 Slope",          .kind = ITEM_ACTION, .on_confirm = trig_slope_R     },
+    { .label = "Both Slope",        .kind = ITEM_ACTION, .on_confirm = trig_slope_both  },
+
+    { .label = "Back", .kind = ITEM_BACK },
 };
 
-/* ============ PAD VIEW ============ */
-static const char *get_pad_hex(void) {
-    static char b[12] = "0x00000000";
-    const char *h = "0123456789ABCDEF";
-    u32 v = g_pad_snapshot;
-    for (int i = 0; i < 8; i++) b[2+i] = h[(v >> ((7-i)*4)) & 0xF];
-    return b;
-}
-
-/* Per-button live indicator strings.  Each getter has its own rotating
- * static buffer so the menu system can hold several references across
- * a single draw without them stomping each other. */
-static char *btn_str(u32 bit, const char *name) {
-    static char bufs[20][24];
-    static int  next = 0;
-    int idx = (next++) % 20;
-    char *b = bufs[idx];
-    int p = 0;
-    int pressed = (g_pad_snapshot & bit) != 0;
-    const char *tag = pressed ? "[X] " : "[ ] ";
-    while (*tag && p < 22) b[p++] = *tag++;
-    while (*name && p < 22) b[p++] = *name++;
-    b[p] = 0;
-    return b;
-}
-
-static const char *get_pd_cross(void)    { return btn_str(DS_CROSS,    "Cross");      }
-static const char *get_pd_circle(void)   { return btn_str(DS_CIRCLE,   "Circle");     }
-static const char *get_pd_triangle(void) { return btn_str(DS_TRIANGLE, "Triangle");   }
-static const char *get_pd_square(void)   { return btn_str(DS_SQUARE,   "Square");     }
-static const char *get_pd_up(void)       { return btn_str(DS_UP,       "Up");         }
-static const char *get_pd_down(void)     { return btn_str(DS_DOWN,     "Down");       }
-static const char *get_pd_left(void)     { return btn_str(DS_LEFT,     "Left");       }
-static const char *get_pd_right(void)    { return btn_str(DS_RIGHT,    "Right");      }
-static const char *get_pd_l1(void)       { return btn_str(DS_L1,       "L1");         }
-static const char *get_pd_r1(void)       { return btn_str(DS_R1,       "R1");         }
-static const char *get_pd_l2(void)       { return btn_str(DS_L2,       "L2");         }
-static const char *get_pd_r2(void)       { return btn_str(DS_R2,       "R2");         }
-static const char *get_pd_l3(void)       { return btn_str(DS_L3,       "L3");         }
-static const char *get_pd_r3(void)       { return btn_str(DS_R3,       "R3");         }
-static const char *get_pd_options(void)  { return btn_str(DS_OPTIONS,  "Options");    }
-static const char *get_pd_share(void)    { return btn_str(DS_SHARE,    "Share/Create");}
-static const char *get_pd_touch(void)    { return btn_str(DS_TOUCHPAD, "Touchpad");   }
-
-static Item scr_pad_items[] = {
-    { .label = "Raw Pad State",  .kind = ITEM_HEADER },
-    { .label = "Bitmask:",       .kind = ITEM_INFO, .get_info = get_pad_hex },
-
-    { .label = "Face Buttons",   .kind = ITEM_HEADER },
-    { .label = "",  .kind = ITEM_INFO, .get_info = get_pd_cross    },
-    { .label = "",  .kind = ITEM_INFO, .get_info = get_pd_circle   },
-    { .label = "",  .kind = ITEM_INFO, .get_info = get_pd_triangle },
-    { .label = "",  .kind = ITEM_INFO, .get_info = get_pd_square   },
-
-    { .label = "D-Pad",          .kind = ITEM_HEADER },
-    { .label = "",  .kind = ITEM_INFO, .get_info = get_pd_up       },
-    { .label = "",  .kind = ITEM_INFO, .get_info = get_pd_down     },
-    { .label = "",  .kind = ITEM_INFO, .get_info = get_pd_left     },
-    { .label = "",  .kind = ITEM_INFO, .get_info = get_pd_right    },
-
-    { .label = "Shoulders",      .kind = ITEM_HEADER },
-    { .label = "",  .kind = ITEM_INFO, .get_info = get_pd_l1       },
-    { .label = "",  .kind = ITEM_INFO, .get_info = get_pd_l2       },
-    { .label = "",  .kind = ITEM_INFO, .get_info = get_pd_r1       },
-    { .label = "",  .kind = ITEM_INFO, .get_info = get_pd_r2       },
-
-    { .label = "Sticks / Misc",  .kind = ITEM_HEADER },
-    { .label = "",  .kind = ITEM_INFO, .get_info = get_pd_l3       },
-    { .label = "",  .kind = ITEM_INFO, .get_info = get_pd_r3       },
-    { .label = "",  .kind = ITEM_INFO, .get_info = get_pd_options  },
-    { .label = "",  .kind = ITEM_INFO, .get_info = get_pd_share    },
-    { .label = "",  .kind = ITEM_INFO, .get_info = get_pd_touch    },
-
-    { .label = "Back",           .kind = ITEM_BACK },
-};
-
-/* ============ CONTROLLER ============ */
+/* ============ CONTROLLER MENU ============ */
 static Item scr_controller_items[] = {
     { .label = "DualSense",       .kind = ITEM_HEADER },
     { .label = "Lightbar",        .kind = ITEM_SUBMENU, .submenu = &scr_lightbar },
@@ -330,13 +283,13 @@ static void refresh_local_ip(void) {
 
     if (!G_CTX.socket_fn || !G_CTX.getsockname_fn) return;
 
-    s32 fd = (s32)NC(G_CTX.G, G_CTX.socket_fn, 2, 2, 0, 0, 0, 0);   /* AF_INET, SOCK_DGRAM */
+    s32 fd = (s32)NC(G_CTX.G, G_CTX.socket_fn, 2, 2, 0, 0, 0, 0);
     if (fd < 0) return;
 
     u8 sa[16]; m_set(sa, 0, 16);
     sa[0] = 16; sa[1] = 2;
-    *(u16*)(sa + 2) = (80 >> 8) | ((80 & 0xFF) << 8);         /* port 80, big-endian */
-    *(u32*)(sa + 4) = 0x08080808;                              /* 8.8.8.8 */
+    *(u16*)(sa + 2) = (80 >> 8) | ((80 & 0xFF) << 8);
+    *(u32*)(sa + 4) = 0x08080808;
 
     void *connect_fn = SYM(G_CTX.G, G_CTX.D, LIBKERNEL_HANDLE, "connect");
     if (connect_fn) NC(G_CTX.G, connect_fn, (u64)fd, (u64)sa, 16, 0, 0, 0);
@@ -365,13 +318,6 @@ static Item scr_network_items[] = {
     { .label = "Back",           .kind = ITEM_BACK },
 };
 
-/* ============ DEBUG ============ */
-static Item scr_debug_items[] = {
-    { .label = "Debug Info", .kind = ITEM_HEADER },
-    { .label = "Nothing here yet — reserved", .kind = ITEM_INFO, .info = "More tools coming soon." },
-    { .label = "Back", .kind = ITEM_BACK },
-};
-
 /* ============ MAIN ============ */
 static void act_exit(Item *it) { (void)it; menu_request_exit(); }
 
@@ -382,7 +328,7 @@ static Item scr_main_items[] = {
     { .label = "Video",       .kind = ITEM_SUBMENU, .submenu = &scr_video    },
     { .label = "Audio",       .kind = ITEM_SUBMENU, .submenu = &scr_audio    },
     { .label = "Network",     .kind = ITEM_SUBMENU, .submenu = &scr_network  },
-    { .label = "Debug",       .kind = ITEM_SUBMENU, .submenu = &scr_debug    },
+    { .label = "Debug Panel", .kind = ITEM_SUBMENU, .submenu = &scr_debug    },
     { .label = "",            .kind = ITEM_HEADER },
     { .label = "Exit (R1 also)", .kind = ITEM_ACTION, .on_confirm = act_exit },
 };
@@ -394,13 +340,13 @@ Screen scr_controller   = { .title="Controller",      .items=scr_controller_item
 Screen scr_lightbar     = { .title="Lightbar",        .items=scr_lightbar_items,     .count=CNT(scr_lightbar_items),     .visible=12, .parent=&scr_controller };
 Screen scr_lightbar_rgb = { .title="Custom RGB",      .items=scr_lightbar_rgb_items, .count=CNT(scr_lightbar_rgb_items), .visible=8,  .parent=&scr_lightbar };
 Screen scr_vib          = { .title="Vibration",       .items=scr_vib_items,          .count=CNT(scr_vib_items),          .visible=10, .parent=&scr_controller };
-Screen scr_trig         = { .title="Trigger Effects", .items=scr_trig_items,         .count=CNT(scr_trig_items),         .visible=8,  .parent=&scr_controller };
-Screen scr_pad          = { .title="Pad State",       .items=scr_pad_items,          .count=CNT(scr_pad_items),          .visible=13, .parent=&scr_controller };
+Screen scr_trig         = { .title="Trigger Effects", .items=scr_trig_items,         .count=CNT(scr_trig_items),         .visible=13, .parent=&scr_controller };
+Screen scr_pad          = { .title="Pad State",       .parent=&scr_controller, .custom_draw = padview_draw, .custom_input = padview_input };
 Screen scr_system       = { .title="System Info",     .items=scr_system_items,       .count=CNT(scr_system_items),       .visible=12, .parent=&scr_main };
 Screen scr_video        = { .title="Video",           .items=scr_video_items,        .count=CNT(scr_video_items),        .visible=8,  .parent=&scr_main };
 Screen scr_audio        = { .title="Audio",           .items=scr_audio_items,        .count=CNT(scr_audio_items),        .visible=8,  .parent=&scr_main };
 Screen scr_network      = { .title="Network",         .items=scr_network_items,      .count=CNT(scr_network_items),      .visible=8,  .parent=&scr_main };
-Screen scr_debug        = { .title="Debug",           .items=scr_debug_items,        .count=CNT(scr_debug_items),        .visible=8,  .parent=&scr_main };
+Screen scr_debug        = { .title="Debug Panel",     .parent=&scr_main, .custom_draw = debugview_draw, .custom_input = debugview_input };
 
 /* ============ MENU LOGIC ============ */
 void menu_init(void) {
@@ -439,8 +385,12 @@ static void move_cursor(int dir) {
 }
 
 void menu_input(struct ctx *c, u32 raw, u32 pressed) {
-    (void)raw; (void)c;
     Screen *s = g_screen;
+
+    if (s->custom_input) {
+        if (s->custom_input(c, raw, pressed)) return;
+    }
+
     Item *it = &s->items[s->cursor];
 
     if (pressed & DS_UP)    move_cursor(-1);
@@ -498,11 +448,10 @@ void menu_tick(struct ctx *c) {
             pad_set_vibration(c, l, s);
         }
     }
-    if (g_screen == &scr_pad) g_pad_snapshot = pad_raw(c);
     if (g_screen == &scr_system) sys_refresh();
 }
 
-/* ============ DRAWING ============ */
+/* ============ DEFAULT DRAW ============ */
 static const char *item_value_str(Item *it) {
     static char buf[32];
     if (it->kind == ITEM_SLIDER) {
@@ -521,16 +470,17 @@ static const char *item_value_str(Item *it) {
 
 void menu_draw(struct ctx *c, u32 *fb) {
     Screen *s = g_screen;
+
+    if (s->custom_draw) { s->custom_draw(c, fb); return; }
+
     ui_clear(fb, COL_BG);
 
-    /* header */
     ui_fill(fb, 0, 0, SCR_W, 90, COL_PANEL);
     ui_fill(fb, 0, 90, SCR_W, 3, COL_ACCENT);
     ui_str(fb, 60, 22, "LuaC0re", COL_ACCENT, 5);
     ui_str(fb, 60 + ui_str_w("LuaC0re ", 5), 22, "Toolbox", COL_TITLE, 5);
     ui_str_right(fb, SCR_W - 60, 30, s->title, COL_TEXT_DIM, 4);
 
-    /* breadcrumb */
     {
         char path[200]; int p = 0;
         Screen *walk[8]; int n = 0;
@@ -545,7 +495,6 @@ void menu_draw(struct ctx *c, u32 *fb) {
         ui_str(fb, 60, 110, path, COL_TEXT_DIM, 3);
     }
 
-    /* body */
     int y0 = 160, row_h = 62;
     int vis = s->visible;
     if (vis > s->count) vis = s->count;
@@ -588,28 +537,6 @@ void menu_draw(struct ctx *c, u32 *fb) {
     /* footer */
     ui_fill(fb, 0, SCR_H - 70, SCR_W, 70, COL_PANEL);
     ui_fill(fb, 0, SCR_H - 73, SCR_W, 3, COL_ACCENT);
-
-    u32 raw = pad_raw(c);
-    char pb[80]; int p = 0;
-    const char *pre = "Pad: ";
-    while (*pre && p < 10) pb[p++] = *pre++;
-    struct { u32 bit; const char *name; } btns[] = {
-        {DS_CROSS,"X"},{DS_CIRCLE,"O"},{DS_TRIANGLE,"/\\"},{DS_SQUARE,"[]"},
-        {DS_UP,"UP"},{DS_DOWN,"DN"},{DS_LEFT,"LT"},{DS_RIGHT,"RT"},
-        {DS_L1,"L1"},{DS_R1,"R1"},{DS_L2,"L2"},{DS_R2,"R2"},
-        {0,0}
-    };
-    for (int i = 0; btns[i].bit; i++) {
-        if (!(raw & btns[i].bit)) continue;
-        if (p > 66) break;
-        pb[p++] = '[';
-        const char *n = btns[i].name;
-        while (*n && p < 74) pb[p++] = *n++;
-        pb[p++] = ']'; pb[p++] = ' ';
-    }
-    if (p <= 5) { s_cpy(pb + 5, "(none)"); p = 11; }
-    pb[p] = 0;
-    ui_str(fb, 60, SCR_H - 44, pb, COL_TEXT, 3);
 
     ui_str_right(fb, SCR_W - 60, SCR_H - 44,
                  "D-Pad: Move   X: Select   O: Back   R1: Exit",
