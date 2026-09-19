@@ -159,6 +159,6 @@ int  eject_disc (struct ctx *c);
 int  eject_close(struct ctx *c);
 const char *eject_last_device(void);
 void eject_reset(void);
-void eject_dump_dev(void);
+void eject_dump_dev(struct ctx *c);
 
 #endif
