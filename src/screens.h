@@ -44,7 +44,7 @@ struct Screen {
 extern Screen *g_screen;
 
 extern Screen scr_main, scr_controller, scr_lightbar, scr_lightbar_rgb;
-extern Screen scr_vib, scr_trig, scr_pad;
+extern Screen scr_vib, scr_trig, scr_speaker, scr_pad;
 extern Screen scr_system, scr_video;
 extern Screen scr_audio, scr_network, scr_debug;
 extern Screen scr_memview, scr_modview;
@@ -66,5 +66,9 @@ void memview_draw   (struct ctx *c, u32 *fb);
 int  memview_input  (struct ctx *c, u32 raw, u32 pressed);
 void modview_draw   (struct ctx *c, u32 *fb);
 int  modview_input  (struct ctx *c, u32 raw, u32 pressed);
+
+/* Virtual keyboard — in-framebuffer, always works */
+int vkb_prompt(struct ctx *c, const char *title, const char *initial,
+               char *out_ascii, int out_len, int max_len);
 
 #endif
