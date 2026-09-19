@@ -3,9 +3,6 @@
 
 struct ctx G_CTX;
 
-/* ============================================================
- * Init
- * ============================================================ */
 void ctx_init(struct ctx *c, u64 eboot_base, u64 dlsym_addr, struct ext_args *ext) {
     m_set(c, 0, sizeof(*c));
     c->eboot_base = eboot_base;
@@ -35,6 +32,8 @@ void ctx_init(struct ctx *c, u64 eboot_base, u64 dlsym_addr, struct ext_args *ex
     c->kwrite    = SYM(G, D, LIBKERNEL_HANDLE, "sceKernelWrite");
     c->kclose    = SYM(G, D, LIBKERNEL_HANDLE, "sceKernelClose");
     c->klseek    = SYM(G, D, LIBKERNEL_HANDLE, "sceKernelLseek");
+    c->getdents  = SYM(G, D, LIBKERNEL_HANDLE, "sceKernelGetdents");
+    if (!c->getdents) c->getdents = SYM(G, D, LIBKERNEL_HANDLE, "getdents");
     c->clock_gettime = SYM(G, D, LIBKERNEL_HANDLE, "clock_gettime");
     c->getpid    = SYM(G, D, LIBKERNEL_HANDLE, "getpid");
     c->socket_fn = SYM(G, D, LIBKERNEL_HANDLE, "socket");
@@ -61,6 +60,7 @@ void ctx_init(struct ctx *c, u64 eboot_base, u64 dlsym_addr, struct ext_args *ex
         c->ime_get_status = SYM(G, D, ime, "sceImeDialogGetStatus");
         c->ime_get_result = SYM(G, D, ime, "sceImeDialogGetResult");
         c->ime_term       = SYM(G, D, ime, "sceImeDialogTerm");
+        c->ime_param_init = SYM(G, D, ime, "sceImeDialogParamInit");
     }
 
     dbg_init(c);
@@ -182,7 +182,6 @@ void ctx_audio_up(struct ctx *c) {
     if (c->aud_open)
         c->audio_h = (s32)NC(G, c->aud_open, 0xFF, 0, 0,
                              SAMPLES_PER_BUF, SAMPLE_RATE, AUDIO_S16_STEREO);
-    ulog_num(c, "[toolbox] audio_h=", (u64)(u32)c->audio_h);
 }
 
 void ctx_pad_up(struct ctx *c) {
@@ -363,34 +362,13 @@ void audio_tone(struct ctx *c, int freq, int ms) {
     }
 }
 
-/* ============================================================
- * Cleanup — restore the controller to its default state so
- * that when control returns to the game (or to the PS5 UI) the
- * DualSense looks normal again.
- *
- *   - Lightbar: soft PS5 blue (0, 0, 200) — this is what the
- *     console ships the controller with out of the box.
- *   - Vibration: off.
- *   - Triggers: no effect (all zeros struct).
- * ============================================================ */
 void ctx_cleanup(struct ctx *c) {
-    /* 1. Kill vibration */
     pad_set_vibration(c, 0, 0);
-
-    /* 2. Give the lightbar back its default colour */
     pad_set_lightbar(c, 0, 0, 200);
-
-    /* 3. Remove any trigger effect we may have installed */
     pad_set_trigger_all_off(c);
-
-    /* Let the pad library flush these state changes */
     if (c->usleep) NC(c->G, c->usleep, 100000, 0,0,0,0,0);
-
-    /* Audio teardown */
     if (c->aud_close && c->audio_h >= 0)
         NC(c->G, c->aud_close, (u64)c->audio_h, 0,0,0,0,0);
-
-    /* Video teardown */
     if (c->fbs[0]) ui_clear(c->fbs[0], 0xFF000000);
     if (c->fbs[1]) ui_clear(c->fbs[1], 0xFF000000);
     if (c->vid_flip && c->video_h >= 0)
@@ -402,9 +380,6 @@ void ctx_cleanup(struct ctx *c) {
         NC(c->G, c->delete_eq, c->eq, 0,0,0,0,0);
 }
 
-/* ============================================================
- * Module info (static buffer, never on stack)
- * ============================================================ */
 static u8 g_modinfo_buf[0x800];
 
 int get_module_info_of_addr(struct ctx *c, u64 addr, struct module_info_simple *out) {
@@ -447,10 +422,20 @@ void mem_write32(struct ctx *c, u64 a, u32 v) { (void)c; *(volatile u32*)(u64)a 
 void mem_write64(struct ctx *c, u64 a, u64 v) { (void)c; *(volatile u64*)(u64)a = v; }
 
 /* ============================================================
- * OSK prompt
+ * OSK prompt — with sceImeDialogParamInit
+ *
+ * The SDK requires sceImeDialogParamInit to be called first
+ * to populate version/magic fields.  Without it,
+ * sceImeDialogInit returns 0x80BC0015 (invalid argument).
+ *
+ * Result codes (SceImeDialogResult.endstatus):
+ *   0 = SCE_IME_DIALOG_RESULT_OK
+ *   1 = SCE_IME_DIALOG_RESULT_USER_CANCELED
+ *   2 = SCE_IME_DIALOG_RESULT_ABORTED
  * ============================================================ */
 static u16 g_osk_text[128];
 static u16 g_osk_prompt[64];
+static u8  g_osk_param[256];
 
 static void ascii_to_u16(u16 *dst, const char *src, int max) {
     int i = 0;
@@ -473,29 +458,38 @@ int osk_prompt(struct ctx *c, const char *title, const char *initial,
 
     if (max_len > 120) max_len = 120;
     ascii_to_u16(g_osk_text,   initial ? initial : "", 128);
-    ascii_to_u16(g_osk_prompt, initial ? initial : "", 64);
+    ascii_to_u16(g_osk_prompt, "Enter text...",         64);
 
-    u8 param[256];
-    m_set(param, 0, 256);
+    m_set(g_osk_param, 0, sizeof(g_osk_param));
 
-    *(u32*)(param + 0x00) = (u32)c->user_id;
-    *(u32*)(param + 0x04) = 0;
-    *(u64*)(param + 0x08) = 0;
-    *(u64*)(param + 0x10) = 0;
-    *(u64*)(param + 0x18) = (u64)g_osk_text;
-    *(u64*)(param + 0x20) = (u64)g_osk_prompt;
-    *(u32*)(param + 0x28) = 0;
-    *(u32*)(param + 0x2C) = 0;
-    *(u32*)(param + 0x30) = 0;
-    *(u32*)(param + 0x34) = 0;
-    *(u32*)(param + 0x38) = 0;
-    *(u32*)(param + 0x3C) = 0;
-    *(u16*)(param + 0x40) = (u16)max_len;
-    *(u16*)(param + 0x42) = 0;
-    *(u32*)(param + 0x44) = 0;
-    *(u32*)(param + 0x48) = 0;
+    /* 1) Ask the SDK to initialise the struct (fills version/reserved) */
+    if (c->ime_param_init) {
+        s32 pr = (s32)NC(c->G, c->ime_param_init, (u64)g_osk_param, 0, 0,0,0,0);
+        ulog_num(c, "[toolbox] osk_param_init ret=", (u64)(u32)pr);
+    } else {
+        ulog(c, "[toolbox] osk: no param_init symbol\n");
+    }
 
-    s32 r = (s32)NC(c->G, c->ime_init, (u64)param, 0, 0,0,0,0);
+    /* 2) Overwrite only the fields we care about */
+    *(u32*)(g_osk_param + 0x00) = (u32)c->user_id;
+    *(u32*)(g_osk_param + 0x04) = 0;                       /* type = DEFAULT */
+    *(u64*)(g_osk_param + 0x08) = 0;                       /* supportedLanguages */
+    *(u64*)(g_osk_param + 0x10) = 0;                       /* enterLabel */
+    *(u64*)(g_osk_param + 0x18) = (u64)g_osk_text;         /* textBox.text */
+    *(u64*)(g_osk_param + 0x20) = (u64)g_osk_prompt;       /* textBox.placeholder */
+    *(u32*)(g_osk_param + 0x28) = 128;                     /* textBox.length */
+    *(u32*)(g_osk_param + 0x2C) = 0;
+    *(u32*)(g_osk_param + 0x30) = 0;                       /* option */
+    *(u32*)(g_osk_param + 0x34) = 0;                       /* align */
+    *(u32*)(g_osk_param + 0x38) = 0;
+    *(u32*)(g_osk_param + 0x3C) = 0;
+    *(u16*)(g_osk_param + 0x40) = (u16)max_len;            /* maxTextLength */
+    *(u16*)(g_osk_param + 0x42) = 0;                       /* inputMethod */
+    *(u32*)(g_osk_param + 0x44) = 0;                       /* filter */
+    *(u32*)(g_osk_param + 0x48) = 0;
+
+    /* 3) sceImeDialogInit(param, extended) — second arg NULL */
+    s32 r = (s32)NC(c->G, c->ime_init, (u64)g_osk_param, 0, 0,0,0,0);
     ulog_num(c, "[toolbox] osk_init ret=", (u64)(u32)r);
     if (r != 0) return -2;
 
@@ -519,18 +513,18 @@ int osk_prompt(struct ctx *c, const char *title, const char *initial,
 
     u8 result[64]; m_set(result, 0, 64);
     NC(c->G, c->ime_get_result, (u64)result, 0,0,0,0,0);
-    u32 end_status = *(u32*)result;
+    u32 end_status = *(u32*)result;   /* 0 = OK */
 
     NC(c->G, c->ime_term, 0,0,0,0,0,0);
     ulog_num(c, "[toolbox] osk_end=", (u64)end_status);
 
-    if (end_status != 1) return -5;
+    if (end_status != 0) return -5;
     u16_to_ascii(out_ascii, g_osk_text, out_len);
     return 0;
 }
 
 /* ============================================================
- * System notification
+ * Notification
  * ============================================================ */
 static u8 g_notify_buf[0xC30];
 
@@ -540,12 +534,10 @@ int notify_send(struct ctx *c, const char *msg, const char *icon_uri) {
 
     int mlen = s_len(msg);
     if (mlen > 1023) mlen = 1023;
-
     int ilen = icon_uri ? s_len(icon_uri) : 0;
     if (ilen > 1023) ilen = 1023;
 
     m_set(g_notify_buf, 0, sizeof(g_notify_buf));
-
     *(u32*)(g_notify_buf + 0x00) = 0;
     *(u32*)(g_notify_buf + 0x10) = 0xFFFFFFFF;
     *(u32*)(g_notify_buf + 0x28) = 0;
