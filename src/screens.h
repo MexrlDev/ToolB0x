@@ -14,21 +14,19 @@ typedef struct Screen Screen;
 typedef struct Item Item;
 typedef void (*ItemFn)(Item *it);
 
-/* Field order chosen so designated initializers are compact and readable.
- * ALWAYS use designated init: { .label="X", .kind=ITEM_ACTION, ... } */
 struct Item {
     const char *label;
     int         kind;
-    ItemFn      on_confirm;   /* press Cross               */
-    ItemFn      on_left;      /* press D-Pad Left          */
-    ItemFn      on_right;     /* press D-Pad Right         */
-    ItemFn      on_change;    /* called by tick if slider  */
-    Screen     *submenu;      /* ITEM_SUBMENU target       */
-    const char *info;         /* ITEM_INFO static text     */
-    const char *(*get_info)(void);  /* ITEM_INFO/ITEM_SLIDER dynamic */
-    int        *value;        /* ITEM_SLIDER/ITEM_TOGGLE   */
+    ItemFn      on_confirm;
+    ItemFn      on_left;
+    ItemFn      on_right;
+    ItemFn      on_change;
+    Screen     *submenu;
+    const char *info;
+    const char *(*get_info)(void);
+    int        *value;
     int         min, max, step;
-    u64         data;         /* arbitrary payload         */
+    u64         data;
 };
 
 struct Screen {
@@ -39,6 +37,9 @@ struct Screen {
     Screen     *parent;
     int         cursor;
     int         scroll;
+    /* Optional custom draw / input.  If set, these take priority. */
+    void      (*custom_draw )(struct ctx *c, u32 *fb);
+    int       (*custom_input)(struct ctx *c, u32 raw, u32 pressed);
 };
 
 extern Screen *g_screen;
@@ -48,11 +49,17 @@ extern Screen scr_vib, scr_trig, scr_pad;
 extern Screen scr_system, scr_video;
 extern Screen scr_audio, scr_network, scr_debug;
 
-void menu_init(void);
-void menu_input(struct ctx *c, u32 raw, u32 pressed);
-void menu_draw (struct ctx *c, u32 *fb);
-void menu_tick (struct ctx *c);
-void menu_goto (Screen *s);
+void menu_init   (void);
+void menu_input  (struct ctx *c, u32 raw, u32 pressed);
+void menu_draw   (struct ctx *c, u32 *fb);
+void menu_tick   (struct ctx *c);
+void menu_goto   (Screen *s);
 void menu_request_exit(void);
+
+/* Custom full-screen views */
+void padview_draw    (struct ctx *c, u32 *fb);
+int  padview_input   (struct ctx *c, u32 raw, u32 pressed);
+void debugview_draw  (struct ctx *c, u32 *fb);
+int  debugview_input (struct ctx *c, u32 raw, u32 pressed);
 
 #endif
