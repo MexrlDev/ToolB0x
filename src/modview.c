@@ -117,4 +117,33 @@ void modview_draw(struct ctx *c, u32 *fb) {
         ui_str(fb, 60, y, r->label, COL_TEXT_DIM, 3);
         if (r->valid) {
             char nameb[40]; int p = 0;
-            for (int j = 0; j < 31 && r->name[j]; j++) nameb[p
+            for (int j = 0; j < 31 && r->name[j]; j++) nameb[p++] = r->name[j];
+            nameb[p] = 0;
+            ui_str(fb, 300, y, nameb, COL_ACCENT, 3);
+            s_hex64(b, r->base);
+            ui_str_right(fb, SCR_W - 60, y, b, COL_TITLE, 3);
+        } else {
+            ui_str(fb, 300, y, "(not resolved)", COL_BAD, 3);
+        }
+        y += 40;
+    }
+
+    ui_fill(fb, 0, SCR_H - 70, SCR_W, 70, COL_PANEL);
+    ui_fill(fb, 0, SCR_H - 73, SCR_W, 3, COL_ACCENT);
+    ui_str(fb, 60, SCR_H - 44,
+           "X: Refresh    O: Back to main menu",
+           COL_TEXT_DIM, 3);
+}
+
+int modview_input(struct ctx *c, u32 raw, u32 pressed) {
+    (void)c; (void)raw;
+    if (pressed & DS_CIRCLE) {
+        menu_goto(scr_modview.parent);
+        return 1;
+    }
+    if (pressed & DS_CROSS) {
+        entered = 0;
+        return 1;
+    }
+    return 1;
+}
