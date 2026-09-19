@@ -110,7 +110,7 @@ static Item scr_vib_items[] = {
     { .label = "Back",        .kind = ITEM_BACK },
 };
 
-/* ============ TRIGGERS (now with correct struct + L/R tests) ============ */
+/* ============ TRIGGERS ============ */
 static void trig_do_off(Item *it) { (void)it; pad_set_trigger_all_off(&G_CTX); }
 
 static void trig_fb_L_weak  (Item *it) { (void)it; pad_set_trigger_feedback(&G_CTX, TRIG_L2, 5, 3); }
@@ -136,7 +136,6 @@ static void trig_slope_both(Item *it) { (void)it; pad_set_trigger_slope(&G_CTX, 
 static Item scr_trig_items[] = {
     { .label = "Trigger Effects", .kind = ITEM_HEADER },
     { .label = "Turn Both Off",     .kind = ITEM_ACTION, .on_confirm = trig_do_off },
-
     { .label = "Feedback",          .kind = ITEM_HEADER },
     { .label = "L2 Weak",           .kind = ITEM_ACTION, .on_confirm = trig_fb_L_weak   },
     { .label = "L2 Medium",         .kind = ITEM_ACTION, .on_confirm = trig_fb_L_med    },
@@ -145,22 +144,18 @@ static Item scr_trig_items[] = {
     { .label = "R2 Medium",         .kind = ITEM_ACTION, .on_confirm = trig_fb_R_med    },
     { .label = "R2 Strong",         .kind = ITEM_ACTION, .on_confirm = trig_fb_R_strong },
     { .label = "Both Medium",       .kind = ITEM_ACTION, .on_confirm = trig_fb_both     },
-
     { .label = "Weapon",            .kind = ITEM_HEADER },
     { .label = "L2 Weapon",         .kind = ITEM_ACTION, .on_confirm = trig_weap_L      },
     { .label = "R2 Weapon",         .kind = ITEM_ACTION, .on_confirm = trig_weap_R      },
     { .label = "Both Weapon",       .kind = ITEM_ACTION, .on_confirm = trig_weap_both   },
-
     { .label = "Vibration",         .kind = ITEM_HEADER },
     { .label = "L2 Vibrate",        .kind = ITEM_ACTION, .on_confirm = trig_vib_L       },
     { .label = "R2 Vibrate",        .kind = ITEM_ACTION, .on_confirm = trig_vib_R       },
     { .label = "Both Vibrate",      .kind = ITEM_ACTION, .on_confirm = trig_vib_both    },
-
     { .label = "Slope Feedback",    .kind = ITEM_HEADER },
     { .label = "L2 Slope",          .kind = ITEM_ACTION, .on_confirm = trig_slope_L     },
     { .label = "R2 Slope",          .kind = ITEM_ACTION, .on_confirm = trig_slope_R     },
     { .label = "Both Slope",        .kind = ITEM_ACTION, .on_confirm = trig_slope_both  },
-
     { .label = "Back", .kind = ITEM_BACK },
 };
 
@@ -200,11 +195,16 @@ static void sys_refresh(void) {
 
     s_hex64(t, get_dm_size(&G_CTX)); sys_add_line("Direct Mem", t);
 
+    u32 fw = get_fw_version_int(&G_CTX);
+    s_hex64(t, (u64)fw);             sys_add_line("FW raw", t);
+
     s_itoa(t, (int)(get_uptime_ms(&G_CTX) / 1000)); sys_add_line("Uptime (s)", t);
     s_itoa(t, (int)G_CTX.total_frames);             sys_add_line("Frames", t);
 
     s_hex64(t, G_CTX.eboot_base);    sys_add_line("EBOOT base", t);
     s_hex64(t, (u64)G_CTX.G);        sys_add_line("Gadget", t);
+    s_hex64(t, (u64)G_CTX.ime_init); sys_add_line("IME init", t);
+    s_hex64(t, (u64)G_CTX.module_info_from_addr); sys_add_line("ModInfo addr", t);
 }
 
 static const char *get_sys_line_0(void) { return g_sysinfo_n > 0 ? g_sysinfo[0] : ""; }
@@ -217,6 +217,8 @@ static const char *get_sys_line_6(void) { return g_sysinfo_n > 6 ? g_sysinfo[6] 
 static const char *get_sys_line_7(void) { return g_sysinfo_n > 7 ? g_sysinfo[7] : ""; }
 static const char *get_sys_line_8(void) { return g_sysinfo_n > 8 ? g_sysinfo[8] : ""; }
 static const char *get_sys_line_9(void) { return g_sysinfo_n > 9 ? g_sysinfo[9] : ""; }
+static const char *get_sys_line_10(void){ return g_sysinfo_n > 10 ? g_sysinfo[10] : ""; }
+static const char *get_sys_line_11(void){ return g_sysinfo_n > 11 ? g_sysinfo[11] : ""; }
 
 static Item scr_system_items[] = {
     { .label = "System Information", .kind = ITEM_HEADER },
@@ -230,6 +232,8 @@ static Item scr_system_items[] = {
     { .label = "", .kind = ITEM_INFO, .get_info = get_sys_line_7 },
     { .label = "", .kind = ITEM_INFO, .get_info = get_sys_line_8 },
     { .label = "", .kind = ITEM_INFO, .get_info = get_sys_line_9 },
+    { .label = "", .kind = ITEM_INFO, .get_info = get_sys_line_10 },
+    { .label = "", .kind = ITEM_INFO, .get_info = get_sys_line_11 },
     { .label = "Back", .kind = ITEM_BACK },
 };
 
@@ -322,31 +326,35 @@ static Item scr_network_items[] = {
 static void act_exit(Item *it) { (void)it; menu_request_exit(); }
 
 static Item scr_main_items[] = {
-    { .label = "LuaC0re Toolbox", .kind = ITEM_HEADER },
-    { .label = "Controller",  .kind = ITEM_SUBMENU, .submenu = &scr_controller },
-    { .label = "System Info", .kind = ITEM_SUBMENU, .submenu = &scr_system   },
-    { .label = "Video",       .kind = ITEM_SUBMENU, .submenu = &scr_video    },
-    { .label = "Audio",       .kind = ITEM_SUBMENU, .submenu = &scr_audio    },
-    { .label = "Network",     .kind = ITEM_SUBMENU, .submenu = &scr_network  },
-    { .label = "Debug Panel", .kind = ITEM_SUBMENU, .submenu = &scr_debug    },
-    { .label = "",            .kind = ITEM_HEADER },
-    { .label = "Exit (R1 also)", .kind = ITEM_ACTION, .on_confirm = act_exit },
+    { .label = "LuaC0re Toolbox",  .kind = ITEM_HEADER },
+    { .label = "Controller",       .kind = ITEM_SUBMENU, .submenu = &scr_controller },
+    { .label = "System Info",      .kind = ITEM_SUBMENU, .submenu = &scr_system   },
+    { .label = "Memory Editor",    .kind = ITEM_SUBMENU, .submenu = &scr_memview  },
+    { .label = "Modules & Kernel", .kind = ITEM_SUBMENU, .submenu = &scr_modview  },
+    { .label = "Video",            .kind = ITEM_SUBMENU, .submenu = &scr_video    },
+    { .label = "Audio",            .kind = ITEM_SUBMENU, .submenu = &scr_audio    },
+    { .label = "Network",          .kind = ITEM_SUBMENU, .submenu = &scr_network  },
+    { .label = "Debug Panel",      .kind = ITEM_SUBMENU, .submenu = &scr_debug    },
+    { .label = "",                 .kind = ITEM_HEADER },
+    { .label = "Exit (R1 on main)", .kind = ITEM_ACTION, .on_confirm = act_exit },
 };
 
 #define CNT(a) ((int)(sizeof(a) / sizeof((a)[0])))
 
-Screen scr_main         = { .title="LuaC0re Toolbox", .items=scr_main_items,         .count=CNT(scr_main_items),         .visible=8,  .parent=0 };
+Screen scr_main         = { .title="LuaC0re Toolbox", .items=scr_main_items,         .count=CNT(scr_main_items),         .visible=9,  .parent=0 };
 Screen scr_controller   = { .title="Controller",      .items=scr_controller_items,   .count=CNT(scr_controller_items),   .visible=8,  .parent=&scr_main };
 Screen scr_lightbar     = { .title="Lightbar",        .items=scr_lightbar_items,     .count=CNT(scr_lightbar_items),     .visible=12, .parent=&scr_controller };
 Screen scr_lightbar_rgb = { .title="Custom RGB",      .items=scr_lightbar_rgb_items, .count=CNT(scr_lightbar_rgb_items), .visible=8,  .parent=&scr_lightbar };
 Screen scr_vib          = { .title="Vibration",       .items=scr_vib_items,          .count=CNT(scr_vib_items),          .visible=10, .parent=&scr_controller };
 Screen scr_trig         = { .title="Trigger Effects", .items=scr_trig_items,         .count=CNT(scr_trig_items),         .visible=13, .parent=&scr_controller };
 Screen scr_pad          = { .title="Pad State",       .parent=&scr_controller, .custom_draw = padview_draw, .custom_input = padview_input };
-Screen scr_system       = { .title="System Info",     .items=scr_system_items,       .count=CNT(scr_system_items),       .visible=12, .parent=&scr_main };
+Screen scr_system       = { .title="System Info",     .items=scr_system_items,       .count=CNT(scr_system_items),       .visible=13, .parent=&scr_main };
 Screen scr_video        = { .title="Video",           .items=scr_video_items,        .count=CNT(scr_video_items),        .visible=8,  .parent=&scr_main };
 Screen scr_audio        = { .title="Audio",           .items=scr_audio_items,        .count=CNT(scr_audio_items),        .visible=8,  .parent=&scr_main };
 Screen scr_network      = { .title="Network",         .items=scr_network_items,      .count=CNT(scr_network_items),      .visible=8,  .parent=&scr_main };
 Screen scr_debug        = { .title="Debug Panel",     .parent=&scr_main, .custom_draw = debugview_draw, .custom_input = debugview_input };
+Screen scr_memview      = { .title="Memory Editor",   .parent=&scr_main, .custom_draw = memview_draw,   .custom_input = memview_input };
+Screen scr_modview      = { .title="Modules & Kernel",.parent=&scr_main, .custom_draw = modview_draw,   .custom_input = modview_input };
 
 /* ============ MENU LOGIC ============ */
 void menu_init(void) {
@@ -354,7 +362,7 @@ void menu_init(void) {
     Screen *all[] = {
         &scr_main, &scr_controller, &scr_lightbar, &scr_lightbar_rgb,
         &scr_vib, &scr_trig, &scr_pad, &scr_system, &scr_video,
-        &scr_audio, &scr_network, &scr_debug
+        &scr_audio, &scr_network, &scr_debug, &scr_memview, &scr_modview
     };
     for (unsigned i = 0; i < sizeof(all) / sizeof(all[0]); i++) {
         all[i]->cursor = 0;
@@ -390,6 +398,7 @@ void menu_input(struct ctx *c, u32 raw, u32 pressed) {
     if (s->custom_input) {
         if (s->custom_input(c, raw, pressed)) return;
     }
+    if (!s->items) return;
 
     Item *it = &s->items[s->cursor];
 
@@ -472,6 +481,7 @@ void menu_draw(struct ctx *c, u32 *fb) {
     Screen *s = g_screen;
 
     if (s->custom_draw) { s->custom_draw(c, fb); return; }
+    if (!s->items) { ui_clear(fb, COL_BG); return; }
 
     ui_clear(fb, COL_BG);
 
@@ -507,8 +517,8 @@ void menu_draw(struct ctx *c, u32 *fb) {
         int sel = (idx == s->cursor);
 
         if (it->kind == ITEM_HEADER) {
+            /* Line only — the golden header text is removed. */
             ui_fill(fb, 60, y + 22, SCR_W - 120, 2, COL_HDR);
-            ui_str(fb, 60, y + 4, it->label, COL_HDR, 3);
             continue;
         }
 
@@ -534,11 +544,12 @@ void menu_draw(struct ctx *c, u32 *fb) {
     if (s->scroll + vis < s->count)
         ui_str_center(fb, y0 + vis * row_h + 6, "v more v", COL_TEXT_DIM, 3);
 
-    /* footer */
     ui_fill(fb, 0, SCR_H - 70, SCR_W, 70, COL_PANEL);
     ui_fill(fb, 0, SCR_H - 73, SCR_W, 3, COL_ACCENT);
 
     ui_str_right(fb, SCR_W - 60, SCR_H - 44,
-                 "D-Pad: Move   X: Select   O: Back   R1: Exit",
+                 (s == &scr_main)
+                    ? "D-Pad: Move   X: Select   R1: EXIT   L1+R1: Main"
+                    : "D-Pad: Move   X: Select   O: Back   L1+R1: Main",
                  COL_TEXT_DIM, 3);
 }
