@@ -49,7 +49,7 @@ extern Screen scr_system, scr_video;
 extern Screen scr_audio, scr_network, scr_debug;
 extern Screen scr_memview, scr_modview;
 extern Screen scr_notify, scr_disc;
-extern Screen scr_credits;
+extern Screen scr_credits, scr_coderun;
 
 void menu_init   (void);
 void menu_input  (struct ctx *c, u32 raw, u32 pressed);
@@ -67,7 +67,6 @@ int  memview_input  (struct ctx *c, u32 raw, u32 pressed);
 void modview_draw   (struct ctx *c, u32 *fb);
 int  modview_input  (struct ctx *c, u32 raw, u32 pressed);
 
-/* Virtual keyboard — in-framebuffer, always works */
 int vkb_prompt(struct ctx *c, const char *title, const char *initial,
                char *out_ascii, int out_len, int max_len);
 
