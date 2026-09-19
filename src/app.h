@@ -151,7 +151,20 @@ void mem_write64(struct ctx *c, u64 addr, u64 v);
 int osk_prompt(struct ctx *c, const char *title, const char *initial,
                char *out_ascii, int out_len, int max_len);
 
-/* Notification: writes to /dev/notification0 (works on PS4 and PS5). */
 int notify_send(struct ctx *c, const char *msg, const char *icon_uri);
+
+/* ----------------------------------------------------------
+ * Optical drive: eject (and optionally reload) the disc.
+ *
+ *   eject_disc()     0 on success
+ *                    -1 no /dev/cdN found
+ *                    -2 ioctl failed on every path/encoding
+ *                    -3 ioctl symbol not resolved
+ *   eject_close()    same conventions
+ * ---------------------------------------------------------- */
+int  eject_disc (struct ctx *c);
+int  eject_close(struct ctx *c);
+const char *eject_last_device(void);
+void eject_reset(void);
 
 #endif
