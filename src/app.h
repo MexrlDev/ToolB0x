@@ -65,6 +65,7 @@ struct ctx {
     void *create_eq, *wait_eq, *delete_eq;
     void *mmap_fn, *munmap;
     void *kopen, *kread, *kwrite, *kclose, *klseek;
+    void *getdents;
     void *clock_gettime, *getpid;
     void *socket_fn, *bind_fn, *listen_fn, *accept_fn;
     void *send_fn, *recv_fn, *sendto_fn, *recvfrom_fn;
@@ -76,6 +77,7 @@ struct ctx {
     void *mprotect;
 
     void *ime_init, *ime_get_status, *ime_get_result, *ime_term;
+    void *ime_param_init;
 
     void *vid_open, *vid_close, *vid_reg, *vid_flip, *vid_rate, *vid_evt;
     s32   video_h;
@@ -153,18 +155,10 @@ int osk_prompt(struct ctx *c, const char *title, const char *initial,
 
 int notify_send(struct ctx *c, const char *msg, const char *icon_uri);
 
-/* ----------------------------------------------------------
- * Optical drive: eject (and optionally reload) the disc.
- *
- *   eject_disc()     0 on success
- *                    -1 no /dev/cdN found
- *                    -2 ioctl failed on every path/encoding
- *                    -3 ioctl symbol not resolved
- *   eject_close()    same conventions
- * ---------------------------------------------------------- */
 int  eject_disc (struct ctx *c);
 int  eject_close(struct ctx *c);
 const char *eject_last_device(void);
 void eject_reset(void);
+void eject_dump_dev(void);
 
 #endif
