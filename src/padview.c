@@ -3,7 +3,6 @@
 
 #define COL_BG       RGB(8,8,14)
 #define COL_PANEL    RGB(20,20,28)
-#define COL_PANEL_HI RGB(30,30,42)
 #define COL_BORDER   RGB(70,70,95)
 #define COL_TEXT     RGB(230,230,240)
 #define COL_TEXT_DIM RGB(120,120,140)
@@ -15,7 +14,6 @@
 #define COL_FLASH_BG RGB(110, 80, 20)
 #define COL_FLASH_BD RGB(255,200, 60)
 
-/* Draw a "button chip" showing live state. */
 static void draw_chip(u32 *fb, int x, int y, int w, int h,
                       const char *name, u32 bit, u32 raw,
                       struct debug_state *dbg, u64 now) {
@@ -23,7 +21,8 @@ static void draw_chip(u32 *fb, int x, int y, int w, int h,
     int flashing = 0;
     for (int i = 0; i < 16; i++) {
         if (dbg->flash[i].bit == bit && dbg->flash[i].until_ms > now) {
-            flashing = 1; break;
+            flashing = 1;
+            break;
         }
     }
 
@@ -104,12 +103,12 @@ void padview_draw(struct ctx *c, u32 *fb) {
     ui_fill(fb, 0, 90, SCR_W, 3, COL_ACCENT);
     ui_str(fb, 60, 22, "PAD STATE", COL_ACCENT, 5);
     ui_str_right(fb, SCR_W - 60, 30,
-                 "LIVE  -  press O to go back", COL_TEXT_DIM, 3);
+                 "LIVE  -  press L1+R1 to go back", COL_TITLE, 3);
 
     int col_x = 60;
     int col_w = (SCR_W - 180) / 2;
 
-    /* ---------- LEFT COLUMN: BUTTON CHIPS ---------- */
+    /* ---------- LEFT: BUTTON CHIPS ---------- */
     int x0 = col_x, y0 = 130;
     int chip_w = (col_w - 40) / 2;
     int chip_h = 66;
@@ -135,11 +134,10 @@ void padview_draw(struct ctx *c, u32 *fb) {
     ROW("Touchpad", DS_TOUCHPAD, "",          0);
     #undef ROW
 
-    /* ---------- RIGHT COLUMN ---------- */
+    /* ---------- RIGHT: BITMASK / PRESSED / BYTES / HISTORY ---------- */
     int rx = col_x + col_w + 40;
     int rw = col_w;
 
-    /* Big bitmask */
     ui_fill(fb, rx, y0, rw, 80, COL_PANEL);
     ui_frame(fb, rx, y0, rw, 80, COL_BORDER, 2);
     ui_str(fb, rx + 16, y0 + 8, "Bitmask:", COL_TEXT_DIM, 3);
@@ -151,13 +149,11 @@ void padview_draw(struct ctx *c, u32 *fb) {
         ui_str(fb, rx + 16, y0 + 40, b, COL_TITLE, 4);
     }
 
-    /* Currently pressed named list */
     int ny = y0 + 100;
     ui_str(fb, rx, ny, "Pressed:", COL_TEXT_DIM, 3);
     ny += 32;
     draw_mask_presses(fb, rx, ny, c->pad_prev);
 
-    /* Raw bytes dump */
     int by = ny + 50;
     ui_str(fb, rx, by, "Raw scePadRead bytes:", COL_TEXT_DIM, 3);
     by += 30;
@@ -190,7 +186,6 @@ void padview_draw(struct ctx *c, u32 *fb) {
         }
     }
 
-    /* Press history */
     by += 10;
     ui_str(fb, rx, by, "History (last 8):", COL_TEXT_DIM, 3);
     by += 30;
@@ -231,7 +226,6 @@ void padview_draw(struct ctx *c, u32 *fb) {
             ui_str(fb, rx, by, "(nothing yet)", COL_TEXT_DIM, 3);
     }
 
-    /* footer */
     ui_fill(fb, 0, SCR_H - 70, SCR_W, 70, COL_PANEL);
     ui_fill(fb, 0, SCR_H - 73, SCR_W, 3, COL_ACCENT);
 
@@ -245,13 +239,15 @@ void padview_draw(struct ctx *c, u32 *fb) {
     for (int i = 0; i < nl; i++) info[ip++] = nb[i];
     info[ip] = 0;
     ui_str(fb, 60, SCR_H - 44, info, COL_TEXT, 3);
+
+    ui_str_right(fb, SCR_W - 60, SCR_H - 44,
+                 "Every button is live-tested here.  O does nothing.",
+                 COL_TEXT_DIM, 3);
 }
 
 int padview_input(struct ctx *c, u32 raw, u32 pressed) {
-    (void)c; (void)raw;
-    if (pressed & DS_CIRCLE) {
-        menu_goto(scr_pad.parent);
-        return 1;
-    }
+    (void)c; (void)raw; (void)pressed;
+    /* Pure listener — swallow every button so nothing navigates.
+     * The only way out is L1+R1, handled centrally in main.c. */
     return 1;
 }
