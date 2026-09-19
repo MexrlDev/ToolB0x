@@ -37,7 +37,6 @@ struct Screen {
     Screen     *parent;
     int         cursor;
     int         scroll;
-    /* Optional custom draw / input.  If set, these take priority. */
     void      (*custom_draw )(struct ctx *c, u32 *fb);
     int       (*custom_input)(struct ctx *c, u32 raw, u32 pressed);
 };
@@ -48,6 +47,7 @@ extern Screen scr_main, scr_controller, scr_lightbar, scr_lightbar_rgb;
 extern Screen scr_vib, scr_trig, scr_pad;
 extern Screen scr_system, scr_video;
 extern Screen scr_audio, scr_network, scr_debug;
+extern Screen scr_memview, scr_modview;
 
 void menu_init   (void);
 void menu_input  (struct ctx *c, u32 raw, u32 pressed);
@@ -56,10 +56,14 @@ void menu_tick   (struct ctx *c);
 void menu_goto   (Screen *s);
 void menu_request_exit(void);
 
-/* Custom full-screen views */
-void padview_draw    (struct ctx *c, u32 *fb);
-int  padview_input   (struct ctx *c, u32 raw, u32 pressed);
-void debugview_draw  (struct ctx *c, u32 *fb);
-int  debugview_input (struct ctx *c, u32 raw, u32 pressed);
+/* custom views */
+void padview_draw   (struct ctx *c, u32 *fb);
+int  padview_input  (struct ctx *c, u32 raw, u32 pressed);
+void debugview_draw (struct ctx *c, u32 *fb);
+int  debugview_input(struct ctx *c, u32 raw, u32 pressed);
+void memview_draw   (struct ctx *c, u32 *fb);
+int  memview_input  (struct ctx *c, u32 raw, u32 pressed);
+void modview_draw   (struct ctx *c, u32 *fb);
+int  modview_input  (struct ctx *c, u32 raw, u32 pressed);
 
 #endif
