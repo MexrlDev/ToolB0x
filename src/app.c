@@ -49,10 +49,12 @@ void ctx_init(struct ctx *c, u64 eboot_base, u64 dlsym_addr, struct ext_args *ex
     c->setsockopt_fn = SYM(G, D, LIBKERNEL_HANDLE, "setsockopt");
     c->poll_fn   = SYM(G, D, LIBKERNEL_HANDLE, "poll");
     c->getsockname_fn = SYM(G, D, LIBKERNEL_HANDLE, "getsockname");
+
+    dbg_init(c);
 }
 
 /* ============================================================
- * Logging helpers
+ * Logging
  * ============================================================ */
 void ulog(struct ctx *c, const char *msg) {
     if (c->log_fd < 0 || !c->sendto_fn) return;
@@ -66,6 +68,51 @@ void ulog_num(struct ctx *c, const char *prefix, u64 v) {
     p += s_hex64(b + p, v);
     b[p++] = '\n'; b[p] = 0;
     ulog(c, b);
+}
+
+/* ============================================================
+ * Debug bookkeeping
+ * ============================================================ */
+void dbg_init(struct ctx *c) {
+    m_set(&c->dbg, 0, sizeof(c->dbg));
+    c->dbg.start_ms    = get_uptime_ms(c);
+    c->dbg.fps_last_ms = c->dbg.start_ms;
+    c->dbg.frame_time_min = 0xFFFFFFFF;
+}
+
+void dbg_reset(struct ctx *c) {
+    dbg_init(c);
+}
+
+void dbg_record_press(struct ctx *c, u32 mask) {
+    u64 now = get_uptime_ms(c);
+    c->dbg.pad_presses++;
+    c->dbg.last_press_mask   = mask;
+    c->dbg.last_press_ago_ms = 0;
+
+    int h = c->dbg.press_hist_head;
+    c->dbg.press_hist[h].mask = mask;
+    c->dbg.press_hist[h].ms   = (u32)(now - c->dbg.start_ms);
+    c->dbg.press_hist_head    = (h + 1) & 15;
+    if (c->dbg.press_hist_count < 16) c->dbg.press_hist_count++;
+
+    /* Update or add flash entry */
+    for (int i = 0; i < 16; i++) {
+        if (c->dbg.flash[i].bit == mask) {
+            c->dbg.flash[i].until_ms = now + 500;
+            return;
+        }
+    }
+    for (int i = 0; i < 16; i++) {
+        if (c->dbg.flash[i].bit == 0) {
+            c->dbg.flash[i].bit      = mask;
+            c->dbg.flash[i].until_ms = now + 500;
+            return;
+        }
+    }
+    /* recycle slot 0 (rare) */
+    c->dbg.flash[0].bit      = mask;
+    c->dbg.flash[0].until_ms = now + 500;
 }
 
 /* ============================================================
@@ -148,7 +195,7 @@ void ctx_audio_up(struct ctx *c) {
 }
 
 /* ============================================================
- * Pad init — with verbose debugging + real user-id lookup
+ * Pad init
  * ============================================================ */
 void ctx_pad_up(struct ctx *c) {
     void *G = c->G, *D = c->D;
@@ -157,8 +204,7 @@ void ctx_pad_up(struct ctx *c) {
     ulog_num(c, "[toolbox] libScePad handle=", (u64)(u32)pad);
     if (pad < 0) { ulog(c, "[toolbox] libScePad load FAILED\n"); return; }
 
-    /* Query the *real* initial user id.  scePadGetHandle requires a
-     * valid user, and on PS5 it is NOT always 1 — this was the bug. */
+    /* Ask libSceUserService for the real initial user id. */
     u32 real_user_id = 0;
     s32 usr = (s32)NC(G, c->load_mod, (u64)"libSceUserService.sprx", 0,0,0,0,0);
     ulog_num(c, "[toolbox] libSceUserService handle=", (u64)(u32)usr);
@@ -188,9 +234,10 @@ void ctx_pad_up(struct ctx *c) {
     c->pad_set_vib      = SYM(G, D, pad, "scePadSetVibration");
     c->pad_set_trigger  = SYM(G, D, pad, "scePadSetTriggerEffect");
 
-    ulog_num(c, "[toolbox] scePadInit      addr=", (u64)c->pad_init);
-    ulog_num(c, "[toolbox] scePadGetHandle addr=", (u64)c->pad_geth);
-    ulog_num(c, "[toolbox] scePadRead      addr=", (u64)c->pad_read);
+    ulog_num(c, "[toolbox] scePadInit        addr=", (u64)c->pad_init);
+    ulog_num(c, "[toolbox] scePadGetHandle   addr=", (u64)c->pad_geth);
+    ulog_num(c, "[toolbox] scePadRead        addr=", (u64)c->pad_read);
+    ulog_num(c, "[toolbox] scePadSetTrigEff   addr=", (u64)c->pad_set_trigger);
 
     if (c->pad_init) {
         s32 r = (s32)NC(G, c->pad_init, 0,0,0,0,0,0);
@@ -206,7 +253,6 @@ void ctx_pad_up(struct ctx *c) {
     }
 }
 
-/* Called from main loop if pad_h < 0 — re-attempts handle grab */
 void ctx_pad_retry(struct ctx *c) {
     if (c->pad_h >= 0 || !c->pad_geth) return;
     if (c->pad_init) (void)NC(c->G, c->pad_init, 0,0,0,0,0,0);
@@ -215,35 +261,44 @@ void ctx_pad_retry(struct ctx *c) {
 }
 
 /* ============================================================
- * Pad read — verbose, with periodic error/disconnect logging
+ * Pad read — tracks counters and stores a copy of the full buffer
  * ============================================================ */
 u32 pad_raw(struct ctx *c) {
     if (c->pad_h < 0 || !c->pad_read) return 0;
 
-    u8 buf[128]; m_set(buf, 0, 128);
+    m_set(c->raw_buf, 0, 128);
+    c->raw_buf_n = 0;
+
     s32 n = (s32)NC(c->G, c->pad_read,
-                    (u64)c->pad_h, (u64)buf, 1, 0, 0, 0);
+                    (u64)c->pad_h, (u64)c->raw_buf, 1, 0, 0, 0);
+    c->dbg.last_read_ret = n;
+
     if (n <= 0) {
+        c->dbg.pad_err++;
         static u32 err_log = 0;
         if ((err_log++ % 300) == 0)
             ulog_num(c, "[toolbox] scePadRead error ret=", (u64)(s64)n);
         return 0;
     }
-    if ((u32)n >= 0x80000000) return 0;
+    if ((u32)n >= 0x80000000) { c->dbg.pad_err++; return 0; }
 
-    u32 r = *(u32*)buf;
-    /* PS5 "not connected" marker — highest bit set */
+    c->raw_buf_n = (u32)n;
+
+    u32 r = *(u32*)c->raw_buf;
     if (r & 0x80000000) {
+        c->dbg.pad_disc++;
         static u32 disc_log = 0;
         if ((disc_log++ % 300) == 0)
             ulog_num(c, "[toolbox] pad disconnected, dword0=", (u64)r);
         return 0;
     }
-    return r & 0x001FFFFF;
+
+    c->dbg.pad_ok++;
+    return r & DS_PAD_MASK;
 }
 
 /* ============================================================
- * Pad output (lightbar / vib / trigger)
+ * Pad outputs
  * ============================================================ */
 int pad_set_lightbar(struct ctx *c, u8 r, u8 g, u8 b) {
     if (c->pad_h < 0 || !c->pad_set_lightbar) return -1;
@@ -257,18 +312,68 @@ int pad_set_vibration(struct ctx *c, u8 large, u8 small) {
     return (s32)NC(c->G, c->pad_set_vib, (u64)c->pad_h, (u64)&v, 0,0,0,0);
 }
 
-int pad_set_trigger(struct ctx *c, int mode, int trig, int p1, int p2, int p3) {
-    if (c->pad_h < 0 || !c->pad_set_trigger) return -1;
-    u8 buf[32]; m_set(buf, 0, 32);
-    if (trig == 0 || trig == 2) buf[0] = (u8)mode;
-    if (trig == 1 || trig == 2) buf[1] = (u8)mode;
-    for (int t = 0; t < 2; t++) {
-        if (t != trig && trig != 2) continue;
-        buf[8 + t*12 + 0] = (u8)p1;
-        buf[8 + t*12 + 1] = (u8)p2;
-        buf[8 + t*12 + 2] = (u8)p3;
+/* ============================================================
+ * Trigger effects — ScePadTriggerEffectParam is exactly 32 bytes:
+ *   +0x00  mode[2]       (L2, R2)
+ *   +0x02  reserved[6]
+ *   +0x08  cmd[0]  { commandId; u8 params[11]; }   (L2)
+ *   +0x14  cmd[1]  { commandId; u8 params[11]; }   (R2)
+ * ============================================================ */
+static void trig_fill(u8 buf[32], int which, int cmd_id,
+                      u8 p0, u8 p1, u8 p2, u8 p3) {
+    m_set(buf, 0, 32);
+    if (cmd_id == TRIG_EFF_OFF || which == TRIG_BOTH) {
+        if (which == TRIG_L2 || which == TRIG_BOTH) buf[0] = (u8)cmd_id;
+        if (which == TRIG_R2 || which == TRIG_BOTH) buf[1] = (u8)cmd_id;
+    } else {
+        /* Only touch one side, leave the other at OFF */
+        buf[0] = (which == TRIG_L2) ? (u8)cmd_id : 0;
+        buf[1] = (which == TRIG_R2) ? (u8)cmd_id : 0;
     }
-    return (s32)NC(c->G, c->pad_set_trigger, (u64)c->pad_h, (u64)buf, 0,0,0,0);
+
+    u8 off = 0;
+    if (which == TRIG_L2 || which == TRIG_BOTH) {
+        buf[0x08 + 0] = (u8)cmd_id;
+        buf[0x08 + 1] = p0; buf[0x08 + 2] = p1;
+        buf[0x08 + 3] = p2; buf[0x08 + 4] = p3;
+        (void)off;
+    }
+    if (which == TRIG_R2 || which == TRIG_BOTH) {
+        buf[0x14 + 0] = (u8)cmd_id;
+        buf[0x14 + 1] = p0; buf[0x14 + 2] = p1;
+        buf[0x14 + 3] = p2; buf[0x14 + 4] = p3;
+    }
+}
+
+static int trig_send(struct ctx *c, u8 buf[32]) {
+    if (c->pad_h < 0 || !c->pad_set_trigger) return -1;
+    s32 r = (s32)NC(c->G, c->pad_set_trigger, (u64)c->pad_h, (u64)buf, 0,0,0,0);
+    return r;
+}
+
+int pad_set_trigger_all_off(struct ctx *c) {
+    u8 buf[32]; m_set(buf, 0, 32);
+    return trig_send(c, buf);
+}
+
+int pad_set_trigger_feedback(struct ctx *c, int which, u8 pos, u8 strength) {
+    u8 buf[32]; trig_fill(buf, which, TRIG_EFF_FEEDBACK, pos, strength, 0, 0);
+    return trig_send(c, buf);
+}
+
+int pad_set_trigger_weapon(struct ctx *c, int which, u8 start, u8 end, u8 strength) {
+    u8 buf[32]; trig_fill(buf, which, TRIG_EFF_WEAPON, start, end, strength, 0);
+    return trig_send(c, buf);
+}
+
+int pad_set_trigger_vibrate(struct ctx *c, int which, u8 pos, u8 amp, u8 freq) {
+    u8 buf[32]; trig_fill(buf, which, TRIG_EFF_VIBRATION, pos, amp, freq, 0);
+    return trig_send(c, buf);
+}
+
+int pad_set_trigger_slope(struct ctx *c, int which, u8 sPos, u8 ePos, u8 sStr, u8 eStr) {
+    u8 buf[32]; trig_fill(buf, which, TRIG_EFF_SLOPE, sPos, ePos, sStr, eStr);
+    return trig_send(c, buf);
 }
 
 /* ============================================================
@@ -284,10 +389,11 @@ void video_flip(struct ctx *c, int wait_vsync) {
     }
     c->active ^= 1;
     c->total_frames++;
+    c->dbg.flips++;
 }
 
 /* ============================================================
- * Clock / DM helpers
+ * Clock / DM
  * ============================================================ */
 u64 get_uptime_ms(struct ctx *c) {
     if (!c->clock_gettime) return 0;
@@ -302,7 +408,7 @@ u64 get_dm_size(struct ctx *c) {
 }
 
 /* ============================================================
- * Audio tone — square wave for `ms`
+ * Audio tone
  * ============================================================ */
 void audio_tone(struct ctx *c, int freq, int ms) {
     if (c->audio_h < 0 || !c->aud_out) return;
@@ -320,6 +426,7 @@ void audio_tone(struct ctx *c, int freq, int ms) {
             phase++;
         }
         NC(c->G, c->aud_out, (u64)c->audio_h, (u64)buf, 0,0,0,0);
+        c->dbg.audio_submits++;
         done += n;
     }
 }
@@ -330,7 +437,7 @@ void audio_tone(struct ctx *c, int freq, int ms) {
 void ctx_cleanup(struct ctx *c) {
     pad_set_vibration(c, 0, 0);
     pad_set_lightbar(c, 0, 0, 0);
-    pad_set_trigger(c, 0, 2, 0, 0, 0);
+    pad_set_trigger_all_off(c);
 
     if (c->aud_close && c->audio_h >= 0)
         NC(c->G, c->aud_close, (u64)c->audio_h, 0,0,0,0,0);
