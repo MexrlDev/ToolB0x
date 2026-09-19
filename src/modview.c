@@ -12,11 +12,11 @@
 #define COL_GOOD     RGB(80,220,120)
 #define COL_BAD      RGB(255,80,80)
 
-#define MAX_ROW 24
+#define MAX_ROW 16
 
 struct mod_row {
     char label[24];
-    u64  addr;      /* function we called GetModuleInfoFromAddr on */
+    u64  addr;
     u64  base;
     char name[32];
     int  valid;
@@ -24,6 +24,7 @@ struct mod_row {
 
 static struct mod_row g_rows[MAX_ROW];
 static int g_nrows = 0;
+static int g_entered = 0;
 
 static void add_row(const char *label, u64 addr) {
     if (g_nrows >= MAX_ROW) return;
@@ -31,19 +32,20 @@ static void add_row(const char *label, u64 addr) {
     int p = 0;
     while (label[p] && p < 23) { r->label[p] = label[p]; p++; }
     r->label[p] = 0;
-    r->addr = addr;
-    r->base = 0;
+    r->addr  = addr;
+    r->base  = 0;
     r->name[0] = 0;
     r->valid = 0;
     g_nrows++;
 }
 
 static void modview_refresh(void) {
+    ulog(&G_CTX, "[toolbox] modview refresh start\n");
     g_nrows = 0;
-    add_row("EBOOT",       G_CTX.eboot_base);
-    add_row("libScePad",   (u64)G_CTX.pad_read);
-    add_row("libSceVideo", (u64)G_CTX.vid_flip);
-    add_row("libSceAudio", (u64)G_CTX.aud_out);
+    add_row("EBOOT",         G_CTX.eboot_base);
+    add_row("libScePad",     (u64)G_CTX.pad_read);
+    add_row("libSceVideo",   (u64)G_CTX.vid_flip);
+    add_row("libSceAudio",   (u64)G_CTX.aud_out);
     add_row("kernel:usleep", (u64)G_CTX.usleep);
     add_row("kernel:alloc",  (u64)G_CTX.alloc_dm);
     add_row("kernel:mmap",   (u64)G_CTX.mmap_fn);
@@ -53,20 +55,26 @@ static void modview_refresh(void) {
 
     for (int i = 0; i < g_nrows; i++) {
         struct mod_row *r = &g_rows[i];
+        ulog_num(&G_CTX, "[toolbox] modview row addr=", r->addr);
         if (!r->addr) continue;
+        if (!G_CTX.module_info_from_addr) continue;
+
         struct module_info_simple mi;
-        if (get_module_info_of_addr(&G_CTX, r->addr, &mi) == 0 && mi.valid) {
+        s32 rc = get_module_info_of_addr(&G_CTX, r->addr, &mi);
+        ulog_num(&G_CTX, "[toolbox]   rc=", (u64)(s64)rc);
+        if (rc == 0 && mi.valid) {
             r->base = mi.base;
             for (int j = 0; j < 31; j++) r->name[j] = mi.name[j];
+            r->name[31] = 0;
             r->valid = 1;
+            ulog_num(&G_CTX, "[toolbox]   base=", r->base);
         }
     }
+    ulog(&G_CTX, "[toolbox] modview refresh done\n");
 }
 
-static int entered = 0;
-
 void modview_draw(struct ctx *c, u32 *fb) {
-    if (!entered) { modview_refresh(); entered = 1; }
+    if (!g_entered) { modview_refresh(); g_entered = 1; }
 
     ui_clear(fb, COL_BG);
 
@@ -79,23 +87,21 @@ void modview_draw(struct ctx *c, u32 *fb) {
     int row_h = 62;
     char b[64];
 
-    /* firmware */
     u32 fw = get_fw_version_int(c);
     ui_str(fb, 60, y, ">> Firmware", COL_HDR, 3); y += 40;
 
     ui_str(fb, 60, y, "Sw version:", COL_TEXT_DIM, 3);
     if (fw) {
-        /* format as major.minor based on typical packing */
         u32 major = (fw >> 24) & 0xFF;
         u32 minor = (fw >> 16) & 0xFF;
         u32 build = fw & 0xFFFF;
         int p = 0;
-        p += s_itoa(b + p, (int)major); b[p++]='.';
-        if (minor < 10) b[p++]='0';
+        p += s_itoa(b + p, (int)major); b[p++] = '.';
+        if (minor < 10) b[p++] = '0';
         p += s_itoa(b + p, (int)minor);
-        b[p++]='.'; b[p++]=' ';
-        if (build < 100) b[p++]='0';
-        if (build < 10)  b[p++]='0';
+        b[p++] = '.'; b[p++] = ' ';
+        if (build < 100) b[p++] = '0';
+        if (build < 10)  b[p++] = '0';
         p += s_itoa(b + p, (int)build);
         b[p] = 0;
     } else {
@@ -142,7 +148,7 @@ int modview_input(struct ctx *c, u32 raw, u32 pressed) {
         return 1;
     }
     if (pressed & DS_CROSS) {
-        entered = 0;
+        g_entered = 0;
         return 1;
     }
     return 1;
