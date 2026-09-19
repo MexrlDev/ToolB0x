@@ -17,7 +17,7 @@
 
 static void row_kv(u32 *fb, int x, int y, int w,
                    const char *key, const char *val, u32 vcol) {
-    ui_str(fb, x,        y, key, COL_TEXT_DIM, 3);
+    ui_str(fb, x, y, key, COL_TEXT_DIM, 3);
     ui_str_right(fb, x + w, y, val, vcol, 3);
 }
 
@@ -52,7 +52,6 @@ void debugview_draw(struct ctx *c, u32 *fb) {
     u64 now  = get_uptime_ms(c);
     u32 uptime = (u32)((now - c->dbg.start_ms) / 1000);
 
-    /* two columns */
     int xL = 60;
     int xR = SCR_W / 2 + 20;
     int colW = SCR_W / 2 - 100;
@@ -61,9 +60,7 @@ void debugview_draw(struct ctx *c, u32 *fb) {
     char b[48];
 
     /* ================= LEFT COLUMN ================= */
-    ui_fill(fb, xL - 20, y - 20, colW + 40, 20, COL_BG);
     ui_str(fb, xL, y - 40, ">> Timing", COL_HDR, 3);
-    y += 0;
 
     fmt_hms(b, (u64)uptime * 1000);
     row_kv(fb, xL, y, colW, "Uptime:", b, COL_TEXT); y += rowH;
@@ -150,7 +147,7 @@ void debugview_draw(struct ctx *c, u32 *fb) {
         char s[24] = "0x00000000";
         const char *h = "0123456789ABCDEF";
         u32 v = c->dbg.last_press_mask;
-        for (int i = 0; i < 8; i++) s[2+i] = h[(v >> ((7-i)*4)) & 0xF];
+        for (int i = 0; i < 8; i++) s[2 + i] = h[(v >> ((7 - i) * 4)) & 0xF];
         row_kv(fb, xR, y, colW, "Last press:", s, COL_TITLE); y += rowH;
     }
 
@@ -171,19 +168,23 @@ void debugview_draw(struct ctx *c, u32 *fb) {
     s_hex64(b, (u64)c->G);
     row_kv(fb, xR, y, colW, "Gadget:", b, COL_TEXT); y += rowH;
 
-    /* ---- pad bytes ---- */
     y += 20;
     ui_str(fb, xR, y, ">> Raw scePadRead (first 32 bytes)", COL_HDR, 3); y += 40;
 
     {
         const char *hx = "0123456789ABCDEF";
-        u32 nb = c->raw_buf_n; if (nb > 32) nb = 32;
+        u32 nb = c->raw_buf_n;
+        if (nb > 32) nb = 32;
         for (u32 off = 0; off < nb; off += 8) {
-            char line[64]; int p = 0;
+            char line[64];
+            int p = 0;
             line[p++] = hx[(off >> 4) & 0xF];
             line[p++] = hx[off & 0xF];
-            line[p++] = ':'; line[p++] = ' ';
-            for (u32 i = off; i < off + 8 && i < nb; i++) {
+            line[p++] = ':';
+            line[p++] = ' ';
+            u32 lim = off + 8;
+            if (lim > nb) lim = nb;
+            for (u32 i = off; i < lim; i++) {
                 u8 v = c->raw_buf[i];
                 line[p++] = hx[(v >> 4) & 0xF];
                 line[p++] = hx[v & 0xF];
@@ -196,7 +197,6 @@ void debugview_draw(struct ctx *c, u32 *fb) {
         if (nb == 0) ui_str(fb, xR, y, "(no bytes yet)", COL_TEXT_DIM, 2);
     }
 
-    /* ---- history ---- */
     y += 20;
     ui_str(fb, xR, y, ">> Press history", COL_HDR, 3); y += 40;
 
@@ -208,25 +208,33 @@ void debugview_draw(struct ctx *c, u32 *fb) {
             int idx = (head - 1 - i + 16) & 15;
             u32 m  = c->dbg.press_hist[idx].mask;
             u32 ms = c->dbg.press_hist[idx].ms;
-            char line[80]; int p = 0;
-            int ss = ms / 1000, mi = ss / 60; ss %= 60;
-            line[p++]='0'+(mi/10); line[p++]='0'+(mi%10); line[p++]=':';
-            line[p++]='0'+(ss/10); line[p++]='0'+(ss%10); line[p++]='.';
+            char line[80];
+            int p = 0;
+            int ss = ms / 1000;
+            int mi = ss / 60;
+            ss %= 60;
+            line[p++] = '0' + (mi / 10);
+            line[p++] = '0' + (mi % 10);
+            line[p++] = ':';
+            line[p++] = '0' + (ss / 10);
+            line[p++] = '0' + (ss % 10);
+            line[p++] = '.';
             u32 frac = ms % 1000;
-            line[p++]='0'+(frac/100); line[p++]='0'+((frac/10)%10); line[p++]='0'+(frac%10);
-            line[p++]=' ';
+            line[p++] = '0' + (frac / 100);
+            line[p++] = '0' + ((frac / 10) % 10);
+            line[p++] = '0' + (frac % 10);
+            line[p++] = ' ';
             char hx[12] = "0x00000000";
             const char *h = "0123456789ABCDEF";
-            for (int k = 0; k < 8; k++) hx[2+k] = h[(m >> ((7-k)*4)) & 0xF];
+            for (int k = 0; k < 8; k++) hx[2 + k] = h[(m >> ((7 - k) * 4)) & 0xF];
             for (int k = 0; k < 10; k++) line[p++] = hx[k];
-            line[p]=0;
+            line[p] = 0;
             ui_str(fb, xR, y, line, (i == 0) ? COL_TITLE : COL_TEXT, 3);
             y += 26;
         }
         if (n == 0) ui_str(fb, xR, y, "(no presses yet)", COL_TEXT_DIM, 3);
     }
 
-    /* footer */
     ui_fill(fb, 0, SCR_H - 70, SCR_W, 70, COL_PANEL);
     ui_fill(fb, 0, SCR_H - 73, SCR_W, 3, COL_ACCENT);
     ui_str(fb, 60, SCR_H - 44,
