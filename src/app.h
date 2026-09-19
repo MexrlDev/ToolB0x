@@ -148,8 +148,10 @@ void mem_write16(struct ctx *c, u64 addr, u16 v);
 void mem_write32(struct ctx *c, u64 addr, u32 v);
 void mem_write64(struct ctx *c, u64 addr, u64 v);
 
-/* try to show an OSK prompt; returns 0 on OK, <0 on failure/cancel */
 int osk_prompt(struct ctx *c, const char *title, const char *initial,
                char *out_ascii, int out_len, int max_len);
+
+/* Notification: writes to /dev/notification0 (works on PS4 and PS5). */
+int notify_send(struct ctx *c, const char *msg, const char *icon_uri);
 
 #endif
