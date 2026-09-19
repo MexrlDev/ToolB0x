@@ -15,8 +15,7 @@
 #define COL_FLASH_BG RGB(110, 80, 20)
 #define COL_FLASH_BD RGB(255,200, 60)
 
-/* Draw a "button chip" showing live state.
- *   bg/border colour depends on (pressed, recently-flashed). */
+/* Draw a "button chip" showing live state. */
 static void draw_chip(u32 *fb, int x, int y, int w, int h,
                       const char *name, u32 bit, u32 raw,
                       struct debug_state *dbg, u64 now) {
@@ -30,7 +29,7 @@ static void draw_chip(u32 *fb, int x, int y, int w, int h,
 
     u32 bg, bd, fg;
     if (pressed) {
-        bg = COL_ON_BG;   bd = COL_ON_BD;    fg = 0xFFFFFFFF;
+        bg = COL_ON_BG;    bd = COL_ON_BD;    fg = 0xFFFFFFFF;
     } else if (flashing) {
         bg = COL_FLASH_BG; bd = COL_FLASH_BD; fg = 0xFFFFF0A0;
     } else {
@@ -40,16 +39,17 @@ static void draw_chip(u32 *fb, int x, int y, int w, int h,
     ui_fill(fb, x, y, w, h, bg);
     ui_frame(fb, x, y, w, h, bd, 3);
 
-    /* state dot on the left */
-    int dot_x = x + 20, dot_y = y + h/2;
-    u32 dot_col = pressed ? RGB(0,255,80) : (flashing ? RGB(255,200,60) : RGB(60,60,80));
-    for (int dy = -8; dy <= 8; dy++)
+    int dot_x = x + 20, dot_y = y + h / 2;
+    u32 dot_col = pressed ? RGB(0,255,80)
+                : (flashing ? RGB(255,200,60) : RGB(60,60,80));
+    for (int dy = -8; dy <= 8; dy++) {
         for (int dx = -8; dx <= 8; dx++) {
-            if (dx*dx + dy*dy > 64) continue;
+            if (dx * dx + dy * dy > 64) continue;
             int px = dot_x + dx, py = dot_y + dy;
             if (px < 0 || px >= SCR_W || py < 0 || py >= SCR_H) continue;
             fb[py * SCR_W + px] = dot_col;
         }
+    }
 
     ui_str(fb, x + 40, y + 10, name, fg, 3);
 }
@@ -85,8 +85,11 @@ static void draw_mask_presses(u32 *fb, int x, int y, u32 mask) {
         if (!(mask & bit)) continue;
         const char *n = bit_name(bit);
         char buf[40]; int p = 0;
-        buf[p++]='['; while(*n && p < 20) buf[p++] = *n++; buf[p++]=']';
-        buf[p++]=' '; buf[p]=0;
+        buf[p++] = '[';
+        while (*n && p < 20) buf[p++] = *n++;
+        buf[p++] = ']';
+        buf[p++] = ' ';
+        buf[p] = 0;
         ui_str(fb, cx, y, buf, COL_ACCENT, 3);
         cx += ui_str_w(buf, 3);
     }
@@ -97,7 +100,6 @@ void padview_draw(struct ctx *c, u32 *fb) {
 
     ui_clear(fb, COL_BG);
 
-    /* header */
     ui_fill(fb, 0, 0, SCR_W, 90, COL_PANEL);
     ui_fill(fb, 0, 90, SCR_W, 3, COL_ACCENT);
     ui_str(fb, 60, 22, "PAD STATE", COL_ACCENT, 5);
@@ -105,7 +107,7 @@ void padview_draw(struct ctx *c, u32 *fb) {
                  "LIVE  -  press O to go back", COL_TEXT_DIM, 3);
 
     int col_x = 60;
-    int col_w = (SCR_W - 180) / 2;  /* two columns */
+    int col_w = (SCR_W - 180) / 2;
 
     /* ---------- LEFT COLUMN: BUTTON CHIPS ---------- */
     int x0 = col_x, y0 = 130;
@@ -133,7 +135,7 @@ void padview_draw(struct ctx *c, u32 *fb) {
     ROW("Touchpad", DS_TOUCHPAD, "",          0);
     #undef ROW
 
-    /* ---------- RIGHT COLUMN: BITMASK + BYTES + HISTORY ---------- */
+    /* ---------- RIGHT COLUMN ---------- */
     int rx = col_x + col_w + 40;
     int rw = col_w;
 
@@ -145,13 +147,14 @@ void padview_draw(struct ctx *c, u32 *fb) {
         char b[20] = "0x00000000";
         const char *h = "0123456789ABCDEF";
         u32 v = c->pad_prev;
-        for (int i = 0; i < 8; i++) b[2+i] = h[(v >> ((7-i)*4)) & 0xF];
+        for (int i = 0; i < 8; i++) b[2 + i] = h[(v >> ((7 - i) * 4)) & 0xF];
         ui_str(fb, rx + 16, y0 + 40, b, COL_TITLE, 4);
     }
 
     /* Currently pressed named list */
     int ny = y0 + 100;
-    ui_str(fb, rx, ny, "Pressed:", COL_TEXT_DIM, 3); ny += 32;
+    ui_str(fb, rx, ny, "Pressed:", COL_TEXT_DIM, 3);
+    ny += 32;
     draw_mask_presses(fb, rx, ny, c->pad_prev);
 
     /* Raw bytes dump */
@@ -166,8 +169,9 @@ void padview_draw(struct ctx *c, u32 *fb) {
         for (u32 off = 0; off < nb; off += 16) {
             int p = 0;
             line[p++] = hx[(off >> 4) & 0xF];
-            line[p++] = hx[off & 0[xF];
-            line[p++] =80 ':'; line[p++] = ' ';
+            line[p++] = hx[off & 0xF];
+            line[p++] = ':';
+            line[p++] = ' ';
             u32 lim = off + 16;
             if (lim > nb) lim = nb;
             for (u32 i = off; i < lim; i++) {
@@ -196,25 +200,29 @@ void padview_draw(struct ctx *c, u32 *fb) {
         int head = c->dbg.press_hist_head;
         for (int i = 0; i < n; i++) {
             int idx = (head - 1 - i + 16) & 15;
-            u32 m = c->dbg.press_hist[idx].mask;
+            u32 m  = c->dbg.press_hist[idx].mask;
             u32 ms = c->dbg.press_hist[idx].ms;
-            char line]; int p = 0;
-            line[p++]='[';
-            int ss = ms / 1000; ms %= 1000;
-            int mi = ss / 60; ss = ss % 60;
-            char tmp[8]; int k = 0;
-            tmp[k++] = '0' + (mi / 10); tmp[k++] = '0' + (mi % 10);
-            tmp[k++] = ':';
-            tmp[k++] = '0' + (ss / 10); tmp[k++] = '0' + (ss % 10);
-            tmp[k++] = '.';
-            tmp[k++] = '0' + (ms / 100);
-            tmp[k++] = '0' + ((ms / 10) % 10);
-            tmp[k++] = '0' + (ms % 10);
-            for (int j = 0; j < k && p < 20; j++) line[p++] = tmp[j];
-            line[p++]=']'; line[p++]=' ';
+            char line[80];
+            int p = 0;
+            line[p++] = '[';
+            int ss = ms / 1000;
+            int mi = ss / 60;
+            ss %= 60;
+            line[p++] = '0' + (mi / 10);
+            line[p++] = '0' + (mi % 10);
+            line[p++] = ':';
+            line[p++] = '0' + (ss / 10);
+            line[p++] = '0' + (ss % 10);
+            line[p++] = '.';
+            u32 frac = ms % 1000;
+            line[p++] = '0' + (frac / 100);
+            line[p++] = '0' + ((frac / 10) % 10);
+            line[p++] = '0' + (frac % 10);
+            line[p++] = ']';
+            line[p++] = ' ';
             const char *nm = bit_name(m);
-            while (*nm && p < 40) line[p++] = *nm++;
-            line[p]=0;
+            while (*nm && p < 60) line[p++] = *nm++;
+            line[p] = 0;
             u32 col = (i == 0) ? COL_TITLE : COL_TEXT;
             ui_str(fb, rx, by, line, col, 3);
             by += 26;
@@ -241,11 +249,9 @@ void padview_draw(struct ctx *c, u32 *fb) {
 
 int padview_input(struct ctx *c, u32 raw, u32 pressed) {
     (void)c; (void)raw;
-    /* Only intercept Circle for back navigation; let everything else fall through. */
     if (pressed & DS_CIRCLE) {
         menu_goto(scr_pad.parent);
         return 1;
     }
-    /* Swallow all other input so the underlying menu doesn't navigate. */
     return 1;
 }
