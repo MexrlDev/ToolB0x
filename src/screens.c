@@ -322,6 +322,52 @@ static Item scr_network_items[] = {
     { .label = "Back",           .kind = ITEM_BACK },
 };
 
+/* ============ NOTIFICATIONS ============ */
+static void notify_custom(Item *it) {
+    (void)it;
+    char msg[128];
+    int r = osk_prompt(&G_CTX, "Notification text", "Hello from LuaC0re!",
+                       msg, sizeof(msg), 100);
+    if (r != 0) {
+        ulog(&G_CTX, "[toolbox] notify custom: OSK cancelled/failed\n");
+        return;
+    }
+    notify_send(&G_CTX, msg, 0);
+}
+static void notify_hello(Item *it) {
+    (void)it;
+    notify_send(&G_CTX, "Hello from the LuaC0re Toolbox!", 0);
+}
+static void notify_running(Item *it) {
+    (void)it;
+    notify_send(&G_CTX, "Toolbox is running.", 0);
+}
+static void notify_ip(Item *it) {
+    (void)it;
+    refresh_local_ip();
+    char buf[96]; int p = 0;
+    const char *pre = "Console IP: ";
+    while (*pre) buf[p++] = *pre++;
+    for (int i = 0; g_local_ip[i] && p < 90; i++) buf[p++] = g_local_ip[i];
+    buf[p] = 0;
+    notify_send(&G_CTX, buf, 0);
+}
+static void notify_test(Item *it) {
+    (void)it;
+    notify_send(&G_CTX, "Test notification 1-2-3.", 0);
+}
+
+static Item scr_notify_items[] = {
+    { .label = "System Notifications", .kind = ITEM_HEADER },
+    { .label = "Custom Message (OSK)", .kind = ITEM_ACTION, .on_confirm = notify_custom },
+    { .label = "Presets",              .kind = ITEM_HEADER },
+    { .label = "Hello World",          .kind = ITEM_ACTION, .on_confirm = notify_hello },
+    { .label = "Toolbox Running",      .kind = ITEM_ACTION, .on_confirm = notify_running },
+    { .label = "Show Console IP",      .kind = ITEM_ACTION, .on_confirm = notify_ip },
+    { .label = "Test 1-2-3",           .kind = ITEM_ACTION, .on_confirm = notify_test },
+    { .label = "Back",                 .kind = ITEM_BACK },
+};
+
 /* ============ MAIN ============ */
 static void act_exit(Item *it) { (void)it; menu_request_exit(); }
 
@@ -329,6 +375,7 @@ static Item scr_main_items[] = {
     { .label = "LuaC0re Toolbox",  .kind = ITEM_HEADER },
     { .label = "Controller",       .kind = ITEM_SUBMENU, .submenu = &scr_controller },
     { .label = "System Info",      .kind = ITEM_SUBMENU, .submenu = &scr_system   },
+    { .label = "Notifications",    .kind = ITEM_SUBMENU, .submenu = &scr_notify   },
     { .label = "Memory Editor",    .kind = ITEM_SUBMENU, .submenu = &scr_memview  },
     { .label = "Modules & Kernel", .kind = ITEM_SUBMENU, .submenu = &scr_modview  },
     { .label = "Video",            .kind = ITEM_SUBMENU, .submenu = &scr_video    },
@@ -352,6 +399,7 @@ Screen scr_system       = { .title="System Info",     .items=scr_system_items,  
 Screen scr_video        = { .title="Video",           .items=scr_video_items,        .count=CNT(scr_video_items),        .visible=8,  .parent=&scr_main };
 Screen scr_audio        = { .title="Audio",           .items=scr_audio_items,        .count=CNT(scr_audio_items),        .visible=8,  .parent=&scr_main };
 Screen scr_network      = { .title="Network",         .items=scr_network_items,      .count=CNT(scr_network_items),      .visible=8,  .parent=&scr_main };
+Screen scr_notify       = { .title="Notifications",   .items=scr_notify_items,       .count=CNT(scr_notify_items),       .visible=8,  .parent=&scr_main };
 Screen scr_debug        = { .title="Debug Panel",     .parent=&scr_main, .custom_draw = debugview_draw, .custom_input = debugview_input };
 Screen scr_memview      = { .title="Memory Editor",   .parent=&scr_main, .custom_draw = memview_draw,   .custom_input = memview_input };
 Screen scr_modview      = { .title="Modules & Kernel",.parent=&scr_main, .custom_draw = modview_draw,   .custom_input = modview_input };
@@ -362,7 +410,8 @@ void menu_init(void) {
     Screen *all[] = {
         &scr_main, &scr_controller, &scr_lightbar, &scr_lightbar_rgb,
         &scr_vib, &scr_trig, &scr_pad, &scr_system, &scr_video,
-        &scr_audio, &scr_network, &scr_debug, &scr_memview, &scr_modview
+        &scr_audio, &scr_network, &scr_notify, &scr_debug,
+        &scr_memview, &scr_modview
     };
     for (unsigned i = 0; i < sizeof(all) / sizeof(all[0]); i++) {
         all[i]->cursor = 0;
@@ -517,7 +566,6 @@ void menu_draw(struct ctx *c, u32 *fb) {
         int sel = (idx == s->cursor);
 
         if (it->kind == ITEM_HEADER) {
-            /* Line only — the golden header text is removed. */
             ui_fill(fb, 60, y + 22, SCR_W - 120, 2, COL_HDR);
             continue;
         }
