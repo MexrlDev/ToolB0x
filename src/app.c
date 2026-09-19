@@ -4,7 +4,7 @@
 struct ctx G_CTX;
 
 /* ============================================================
- * Init — resolve every libkernel symbol we might need
+ * Init
  * ============================================================ */
 void ctx_init(struct ctx *c, u64 eboot_base, u64 dlsym_addr, struct ext_args *ext) {
     m_set(c, 0, sizeof(*c));
@@ -50,6 +50,12 @@ void ctx_init(struct ctx *c, u64 eboot_base, u64 dlsym_addr, struct ext_args *ex
     c->poll_fn   = SYM(G, D, LIBKERNEL_HANDLE, "poll");
     c->getsockname_fn = SYM(G, D, LIBKERNEL_HANDLE, "getsockname");
 
+    /* Kernel info helpers */
+    c->module_info_from_addr = SYM(G, D, LIBKERNEL_HANDLE, "sceKernelGetModuleInfoFromAddr");
+    c->sys_sw_version        = SYM(G, D, LIBKERNEL_HANDLE, "sceKernelGetSystemSwVersion");
+    c->virtual_query         = SYM(G, D, LIBKERNEL_HANDLE, "sceKernelVirtualQuery");
+    c->mprotect              = SYM(G, D, LIBKERNEL_HANDLE, "sceKernelMprotect");
+
     dbg_init(c);
 }
 
@@ -80,9 +86,7 @@ void dbg_init(struct ctx *c) {
     c->dbg.frame_time_min = 0xFFFFFFFF;
 }
 
-void dbg_reset(struct ctx *c) {
-    dbg_init(c);
-}
+void dbg_reset(struct ctx *c) { dbg_init(c); }
 
 void dbg_record_press(struct ctx *c, u32 mask) {
     u64 now = get_uptime_ms(c);
@@ -96,23 +100,13 @@ void dbg_record_press(struct ctx *c, u32 mask) {
     c->dbg.press_hist_head    = (h + 1) & 15;
     if (c->dbg.press_hist_count < 16) c->dbg.press_hist_count++;
 
-    /* Update or add flash entry */
-    for (int i = 0; i < 16; i++) {
-        if (c->dbg.flash[i].bit == mask) {
-            c->dbg.flash[i].until_ms = now + 500;
-            return;
-        }
-    }
-    for (int i = 0; i < 16; i++) {
+    for (int i = 0; i < 16; i++)
+        if (c->dbg.flash[i].bit == mask) { c->dbg.flash[i].until_ms = now + 500; return; }
+    for (int i = 0; i < 16; i++)
         if (c->dbg.flash[i].bit == 0) {
-            c->dbg.flash[i].bit      = mask;
-            c->dbg.flash[i].until_ms = now + 500;
-            return;
+            c->dbg.flash[i].bit = mask; c->dbg.flash[i].until_ms = now + 500; return;
         }
-    }
-    /* recycle slot 0 (rare) */
-    c->dbg.flash[0].bit      = mask;
-    c->dbg.flash[0].until_ms = now + 500;
+    c->dbg.flash[0].bit = mask; c->dbg.flash[0].until_ms = now + 500;
 }
 
 /* ============================================================
@@ -121,7 +115,6 @@ void dbg_record_press(struct ctx *c, u32 mask) {
 int ctx_video_up(struct ctx *c, u64 eboot_base) {
     void *G = c->G, *D = c->D;
     if (!c->usleep || !c->load_mod || !c->alloc_dm || !c->map_dm) return -1;
-
     if (c->cancel) {
         u64 gs = *(u64 *)(eboot_base + EBOOT_GS_THREAD);
         if (gs) NC(G, c->cancel, gs, 0,0,0,0,0);
@@ -195,7 +188,7 @@ void ctx_audio_up(struct ctx *c) {
 }
 
 /* ============================================================
- * Pad init
+ * Pad — multiple symbol attempts for the trigger effect fn
  * ============================================================ */
 void ctx_pad_up(struct ctx *c) {
     void *G = c->G, *D = c->D;
@@ -204,24 +197,20 @@ void ctx_pad_up(struct ctx *c) {
     ulog_num(c, "[toolbox] libScePad handle=", (u64)(u32)pad);
     if (pad < 0) { ulog(c, "[toolbox] libScePad load FAILED\n"); return; }
 
-    /* Ask libSceUserService for the real initial user id. */
     u32 real_user_id = 0;
     s32 usr = (s32)NC(G, c->load_mod, (u64)"libSceUserService.sprx", 0,0,0,0,0);
     ulog_num(c, "[toolbox] libSceUserService handle=", (u64)(u32)usr);
     if (usr > 0) {
         void *get_user = SYM(G, D, usr, "sceUserServiceGetInitialUser");
-        ulog_num(c, "[toolbox] GetInitialUser addr=", (u64)get_user);
         if (get_user) {
             u32 uid = 0;
             s32 rc = (s32)NC(G, get_user, (u64)&uid, 0,0,0,0,0);
-            ulog_num(c, "[toolbox] GetInitialUser ret=",  (u64)(u32)rc);
-            ulog_num(c, "[toolbox] initial uid      =",  (u64)uid);
             if (rc == 0 && uid != 0) real_user_id = uid;
+            ulog_num(c, "[toolbox] initial uid      =",  (u64)uid);
         }
     }
     if (real_user_id == 0) {
         real_user_id = (u32)c->ext->dbg[0];
-        ulog_num(c, "[toolbox] fallback to lua uid=", (u64)real_user_id);
         if (!real_user_id) real_user_id = 1;
     }
     c->user_id = (s32)real_user_id;
@@ -232,25 +221,52 @@ void ctx_pad_up(struct ctx *c) {
     c->pad_read         = SYM(G, D, pad, "scePadRead");
     c->pad_set_lightbar = SYM(G, D, pad, "scePadSetLightBar");
     c->pad_set_vib      = SYM(G, D, pad, "scePadSetVibration");
-    c->pad_set_trigger  = SYM(G, D, pad, "scePadSetTriggerEffect");
 
-    ulog_num(c, "[toolbox] scePadInit        addr=", (u64)c->pad_init);
-    ulog_num(c, "[toolbox] scePadGetHandle   addr=", (u64)c->pad_geth);
-    ulog_num(c, "[toolbox] scePadRead        addr=", (u64)c->pad_read);
-    ulog_num(c, "[toolbox] scePadSetTrigEff   addr=", (u64)c->pad_set_trigger);
-
-    if (c->pad_init) {
-        s32 r = (s32)NC(G, c->pad_init, 0,0,0,0,0,0);
-        ulog_num(c, "[toolbox] scePadInit ret=", (u64)(u32)r);
-        if (c->usleep) NC(G, c->usleep, 50000, 0,0,0,0,0);
+    /* Try a bunch of alternate trigger symbol names */
+    static const char *trig_names[] = {
+        "scePadSetTriggerEffect",
+        "scePadSetTriggerEffectForController",
+        "scePadSetTriggerEffectEx",
+        "scePadSetTriggerEffectA",
+        "scePadSetTriggerEffectB",
+        "scePadSetTriggerEffectOld",
+        0
+    };
+    c->pad_set_trigger = 0;
+    c->pad_trigger_sym_used = "(none)";
+    for (int i = 0; trig_names[i]; i++) {
+        void *p = SYM(G, D, pad, trig_names[i]);
+        if (p) {
+            c->pad_set_trigger = p;
+            c->pad_trigger_sym_used = trig_names[i];
+            ulog(c, "[toolbox] trigger sym OK: ");
+            ulog(c, trig_names[i]);
+            ulog(c, "\n");
+            break;
+        }
     }
+    /* Fallback: try libkernel handle */
+    if (!c->pad_set_trigger) {
+        for (int i = 0; trig_names[i]; i++) {
+            void *p = SYM(G, D, LIBKERNEL_HANDLE, trig_names[i]);
+            if (p) {
+                c->pad_set_trigger = p;
+                c->pad_trigger_sym_used = trig_names[i];
+                ulog(c, "[toolbox] trigger from libkernel: ");
+                ulog(c, trig_names[i]);
+                ulog(c, "\n");
+                break;
+            }
+        }
+    }
+    if (!c->pad_set_trigger)
+        ulog(c, "[toolbox] WARN: no trigger effect symbol found\n");
 
-    if (c->pad_geth) {
+    if (c->pad_init) (void)NC(G, c->pad_init, 0,0,0,0,0,0);
+    if (c->usleep) NC(G, c->usleep, 50000, 0,0,0,0,0);
+    if (c->pad_geth)
         c->pad_h = (s32)NC(G, c->pad_geth, (u64)c->user_id, 0,0,0,0,0);
-        ulog_num(c, "[toolbox] scePadGetHandle ret(pad_h)=", (u64)(u32)c->pad_h);
-    } else {
-        ulog(c, "[toolbox] scePadGetHandle not resolved!\n");
-    }
+    ulog_num(c, "[toolbox] pad_h=", (u64)(u32)c->pad_h);
 }
 
 void ctx_pad_retry(struct ctx *c) {
@@ -260,46 +276,21 @@ void ctx_pad_retry(struct ctx *c) {
     ulog_num(c, "[toolbox] pad_h retry ->", (u64)(u32)c->pad_h);
 }
 
-/* ============================================================
- * Pad read — tracks counters and stores a copy of the full buffer
- * ============================================================ */
 u32 pad_raw(struct ctx *c) {
     if (c->pad_h < 0 || !c->pad_read) return 0;
-
     m_set(c->raw_buf, 0, 128);
     c->raw_buf_n = 0;
-
-    s32 n = (s32)NC(c->G, c->pad_read,
-                    (u64)c->pad_h, (u64)c->raw_buf, 1, 0, 0, 0);
+    s32 n = (s32)NC(c->G, c->pad_read, (u64)c->pad_h, (u64)c->raw_buf, 1, 0, 0, 0);
     c->dbg.last_read_ret = n;
-
-    if (n <= 0) {
-        c->dbg.pad_err++;
-        static u32 err_log = 0;
-        if ((err_log++ % 300) == 0)
-            ulog_num(c, "[toolbox] scePadRead error ret=", (u64)(s64)n);
-        return 0;
-    }
+    if (n <= 0) { c->dbg.pad_err++; return 0; }
     if ((u32)n >= 0x80000000) { c->dbg.pad_err++; return 0; }
-
     c->raw_buf_n = (u32)n;
-
     u32 r = *(u32*)c->raw_buf;
-    if (r & 0x80000000) {
-        c->dbg.pad_disc++;
-        static u32 disc_log = 0;
-        if ((disc_log++ % 300) == 0)
-            ulog_num(c, "[toolbox] pad disconnected, dword0=", (u64)r);
-        return 0;
-    }
-
+    if (r & 0x80000000) { c->dbg.pad_disc++; return 0; }
     c->dbg.pad_ok++;
     return r & DS_PAD_MASK;
 }
 
-/* ============================================================
- * Pad outputs
- * ============================================================ */
 int pad_set_lightbar(struct ctx *c, u8 r, u8 g, u8 b) {
     if (c->pad_h < 0 || !c->pad_set_lightbar) return -1;
     struct { u8 r, g, b, x; } col = { r, g, b, 0 };
@@ -313,64 +304,51 @@ int pad_set_vibration(struct ctx *c, u8 large, u8 small) {
 }
 
 /* ============================================================
- * Trigger effects — ScePadTriggerEffectParam is exactly 32 bytes:
- *   +0x00  mode[2]       (L2, R2)
- *   +0x02  reserved[6]
- *   +0x08  cmd[0]  { commandId; u8 params[11]; }   (L2)
- *   +0x14  cmd[1]  { commandId; u8 params[11]; }   (R2)
+ * Trigger effects — correct 32-byte ScePadTriggerEffectParam
  * ============================================================ */
 static void trig_fill(u8 buf[32], int which, int cmd_id,
                       u8 p0, u8 p1, u8 p2, u8 p3) {
     m_set(buf, 0, 32);
-    if (cmd_id == TRIG_EFF_OFF || which == TRIG_BOTH) {
-        if (which == TRIG_L2 || which == TRIG_BOTH) buf[0] = (u8)cmd_id;
-        if (which == TRIG_R2 || which == TRIG_BOTH) buf[1] = (u8)cmd_id;
-    } else {
-        /* Only touch one side, leave the other at OFF */
-        buf[0] = (which == TRIG_L2) ? (u8)cmd_id : 0;
-        buf[1] = (which == TRIG_R2) ? (u8)cmd_id : 0;
-    }
+    if (which == TRIG_L2 || which == TRIG_BOTH) buf[0] = (u8)cmd_id;
+    if (which == TRIG_R2 || which == TRIG_BOTH) buf[1] = (u8)cmd_id;
 
-    u8 off = 0;
     if (which == TRIG_L2 || which == TRIG_BOTH) {
         buf[0x08 + 0] = (u8)cmd_id;
-        buf[0x08 + 1] = p0; buf[0x08 + 2] = p1;
-        buf[0x08 + 3] = p2; buf[0x08 + 4] = p3;
-        (void)off;
+        buf[0x08 + 1] = p0;
+        buf[0x08 + 2] = p1;
+        buf[0x08 + 3] = p2;
+        buf[0x08 + 4] = p3;
     }
     if (which == TRIG_R2 || which == TRIG_BOTH) {
         buf[0x14 + 0] = (u8)cmd_id;
-        buf[0x14 + 1] = p0; buf[0x14 + 2] = p1;
-        buf[0x14 + 3] = p2; buf[0x14 + 4] = p3;
+        buf[0x14 + 1] = p0;
+        buf[0x14 + 2] = p1;
+        buf[0x14 + 3] = p2;
+        buf[0x14 + 4] = p3;
     }
 }
 
 static int trig_send(struct ctx *c, u8 buf[32]) {
     if (c->pad_h < 0 || !c->pad_set_trigger) return -1;
-    s32 r = (s32)NC(c->G, c->pad_set_trigger, (u64)c->pad_h, (u64)buf, 0,0,0,0);
-    return r;
+    return (s32)NC(c->G, c->pad_set_trigger, (u64)c->pad_h, (u64)buf, 0,0,0,0);
 }
 
 int pad_set_trigger_all_off(struct ctx *c) {
     u8 buf[32]; m_set(buf, 0, 32);
     return trig_send(c, buf);
 }
-
 int pad_set_trigger_feedback(struct ctx *c, int which, u8 pos, u8 strength) {
     u8 buf[32]; trig_fill(buf, which, TRIG_EFF_FEEDBACK, pos, strength, 0, 0);
     return trig_send(c, buf);
 }
-
 int pad_set_trigger_weapon(struct ctx *c, int which, u8 start, u8 end, u8 strength) {
     u8 buf[32]; trig_fill(buf, which, TRIG_EFF_WEAPON, start, end, strength, 0);
     return trig_send(c, buf);
 }
-
 int pad_set_trigger_vibrate(struct ctx *c, int which, u8 pos, u8 amp, u8 freq) {
     u8 buf[32]; trig_fill(buf, which, TRIG_EFF_VIBRATION, pos, amp, freq, 0);
     return trig_send(c, buf);
 }
-
 int pad_set_trigger_slope(struct ctx *c, int which, u8 sPos, u8 ePos, u8 sStr, u8 eStr) {
     u8 buf[32]; trig_fill(buf, which, TRIG_EFF_SLOPE, sPos, ePos, sStr, eStr);
     return trig_send(c, buf);
@@ -393,7 +371,7 @@ void video_flip(struct ctx *c, int wait_vsync) {
 }
 
 /* ============================================================
- * Clock / DM
+ * Misc
  * ============================================================ */
 u64 get_uptime_ms(struct ctx *c) {
     if (!c->clock_gettime) return 0;
@@ -407,9 +385,6 @@ u64 get_dm_size(struct ctx *c) {
     return NC(c->G, c->dm_size, 0,0,0,0,0,0);
 }
 
-/* ============================================================
- * Audio tone
- * ============================================================ */
 void audio_tone(struct ctx *c, int freq, int ms) {
     if (c->audio_h < 0 || !c->aud_out) return;
     static s16 buf[SAMPLES_PER_BUF * 2];
@@ -438,13 +413,10 @@ void ctx_cleanup(struct ctx *c) {
     pad_set_vibration(c, 0, 0);
     pad_set_lightbar(c, 0, 0, 0);
     pad_set_trigger_all_off(c);
-
     if (c->aud_close && c->audio_h >= 0)
         NC(c->G, c->aud_close, (u64)c->audio_h, 0,0,0,0,0);
-
     if (c->fbs[0]) ui_clear(c->fbs[0], 0xFF000000);
     if (c->fbs[1]) ui_clear(c->fbs[1], 0xFF000000);
-
     if (c->vid_flip && c->video_h >= 0)
         NC(c->G, c->vid_flip, (u64)c->video_h, (u64)c->active, 1, 0,0,0);
     if (c->usleep) NC(c->G, c->usleep, 50000, 0,0,0,0,0);
@@ -453,3 +425,47 @@ void ctx_cleanup(struct ctx *c) {
     if (c->delete_eq && c->eq)
         NC(c->G, c->delete_eq, c->eq, 0,0,0,0,0);
 }
+
+/* ============================================================
+ * Module info + firmware
+ * ============================================================ */
+int get_module_info_of_addr(struct ctx *c, u64 addr, struct module_info_simple *out) {
+    m_set(out, 0, sizeof(*out));
+    if (!c->module_info_from_addr) return -1;
+    u8 buf[0x200];
+    m_set(buf, 0, sizeof(buf));
+    *(u32*)buf = 0x200;
+    s32 r = (s32)NC(c->G, c->module_info_from_addr, addr, 1, (u64)buf, 0,0,0);
+    if (r != 0) return r;
+    /* name at +0x08 (32 bytes) */
+    for (int i = 0; i < 31; i++) {
+        char ch = (char)buf[0x08 + i];
+        out->name[i] = ch;
+        if (!ch) break;
+    }
+    out->name[31] = 0;
+    /* first segment at +0x160 (verified against LuaC0re) */
+    out->base  = *(u64*)(buf + 0x160);
+    out->valid = 1;
+    return 0;
+}
+
+u32 get_fw_version_int(struct ctx *c) {
+    if (!c->sys_sw_version) return 0;
+    u32 v[4] = {0,0,0,0};
+    s32 r = (s32)NC(c->G, c->sys_sw_version, (u64)v, 0,0,0,0,0);
+    (void)r;
+    return v[0];
+}
+
+/* ============================================================
+ * Memory read/write helpers
+ * ============================================================ */
+u8  mem_read8 (struct ctx *c, u64 a) { (void)c; return *(volatile u8 *)(u64)a; }
+u16 mem_read16(struct ctx *c, u64 a) { (void)c; return *(volatile u16*)(u64)a; }
+u32 mem_read32(struct ctx *c, u64 a) { (void)c; return *(volatile u32*)(u64)a; }
+u64 mem_read64(struct ctx *c, u64 a) { (void)c; return *(volatile u64*)(u64)a; }
+void mem_write8 (struct ctx *c, u64 a, u8 v)  { (void)c; *(volatile u8 *)(u64)a = v; }
+void mem_write16(struct ctx *c, u64 a, u16 v) { (void)c; *(volatile u16*)(u64)a = v; }
+void mem_write32(struct ctx *c, u64 a, u32 v) { (void)c; *(volatile u32*)(u64)a = v; }
+void mem_write64(struct ctx *c, u64 a, u64 v) { (void)c; *(volatile u64*)(u64)a = v; }
