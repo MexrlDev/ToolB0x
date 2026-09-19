@@ -29,7 +29,7 @@ static int do_relocations(u64 load_base) {
 static volatile int g_exit_now = 0;
 void menu_request_exit(void) { g_exit_now = 1; }
 
-#define TOOLBOX_BUILD_TAG  "[toolbox] BUILD v6-kernel-mem (2025)\n"
+#define TOOLBOX_BUILD_TAG  "[toolbox] BUILD v7-l1r1-pad (2025)\n"
 
 __attribute__((section(".text._start")))
 void _start(u64 eboot_base, u64 dlsym_addr, struct ext_args *ext) {
@@ -65,6 +65,7 @@ void _start(u64 eboot_base, u64 dlsym_addr, struct ext_args *ext) {
 
     static u32 dbg_tick   = 0;
     static u32 retry_tick = 0;
+    static int l1r1_armed = 1;
 
     while (!g_exit_now) {
         u64 t0 = get_uptime_ms(&G_CTX);
@@ -85,19 +86,34 @@ void _start(u64 eboot_base, u64 dlsym_addr, struct ext_args *ext) {
             ctx_pad_retry(&G_CTX);
         }
 
-        /* ---- L1 + R1 escape hatch: force back to main menu ---- */
-        int on_main = (g_screen == &scr_main);
-        if (!on_main && (raw & (DS_L1 | DS_R1)) == (DS_L1 | DS_R1)) {
-            menu_goto(&scr_main);
-            G_CTX.pad_prev = raw;   /* consume the edge so R1 release doesn't fire */
-            ulog(&G_CTX, "[toolbox] L1+R1 -> main\n");
-            menu_draw(&G_CTX, G_CTX.fbs[G_CTX.active]);
-            video_flip(&G_CTX, 1);
-            continue;
+        /* ---- L1+R1: central escape hatch (debounced).
+         * On pad view  -> back to Controller submenu (parent)
+         * On any other non-main screen -> back to Main
+         * On main menu -> does nothing (R1 alone exits).
+         * Debounced: fires only once per held-down event, so the same
+         * L1+R1 press can't cascade two screens in one go. */
+        {
+            int both_held = (raw & (DS_L1 | DS_R1)) == (DS_L1 | DS_R1);
+            if (!both_held) l1r1_armed = 1;
+
+            if (both_held && l1r1_armed) {
+                l1r1_armed = 0;
+                if (g_screen == &scr_pad) {
+                    menu_goto(scr_pad.parent);
+                    ulog(&G_CTX, "[toolbox] L1+R1 -> controller menu\n");
+                } else if (g_screen != &scr_main) {
+                    menu_goto(&scr_main);
+                    ulog(&G_CTX, "[toolbox] L1+R1 -> main\n");
+                }
+                G_CTX.pad_prev = raw;
+                menu_draw(&G_CTX, G_CTX.fbs[G_CTX.active]);
+                video_flip(&G_CTX, 1);
+                continue;
+            }
         }
 
         /* ---- R1 = exit ONLY on main menu ---- */
-        if (on_main && (pressed & DS_R1)) {
+        if (g_screen == &scr_main && (pressed & DS_R1)) {
             ulog(&G_CTX, "[toolbox] R1 exit (main menu)\n");
             break;
         }
@@ -114,8 +130,8 @@ void _start(u64 eboot_base, u64 dlsym_addr, struct ext_args *ext) {
         video_flip(&G_CTX, 1);
         u64 t_flip_end = get_uptime_ms(&G_CTX);
 
-        u32 draw_ms = (u32)(t_draw_end - t_draw_start);
-        u32 flip_ms = (u32)(t_flip_end - t_draw_end);
+        u32 draw_ms  = (u32)(t_draw_end - t_draw_start);
+        u32 flip_ms  = (u32)(t_flip_end - t_draw_end);
         u32 frame_ms = (u32)(t_flip_end - t0);
 
         G_CTX.dbg.draw_time_ms  = draw_ms;
