@@ -49,6 +49,7 @@ extern Screen scr_system, scr_video;
 extern Screen scr_audio, scr_network, scr_debug;
 extern Screen scr_memview, scr_modview;
 extern Screen scr_notify, scr_disc;
+extern Screen scr_credits;
 
 void menu_init   (void);
 void menu_input  (struct ctx *c, u32 raw, u32 pressed);
