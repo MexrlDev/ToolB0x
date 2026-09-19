@@ -47,7 +47,7 @@ extern Screen scr_main, scr_controller, scr_lightbar, scr_lightbar_rgb;
 extern Screen scr_vib, scr_trig, scr_pad;
 extern Screen scr_system, scr_video;
 extern Screen scr_audio, scr_network, scr_debug;
-extern Screen scr_memview, scr_modview;
+extern Screen scr_memview, scr_modview, scr_notify;
 
 void menu_init   (void);
 void menu_input  (struct ctx *c, u32 raw, u32 pressed);
