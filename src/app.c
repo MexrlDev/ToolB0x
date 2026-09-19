@@ -3,9 +3,6 @@
 
 struct ctx G_CTX;
 
-/* ============================================================
- * Init
- * ============================================================ */
 void ctx_init(struct ctx *c, u64 eboot_base, u64 dlsym_addr, struct ext_args *ext) {
     m_set(c, 0, sizeof(*c));
     c->eboot_base = eboot_base;
@@ -50,18 +47,23 @@ void ctx_init(struct ctx *c, u64 eboot_base, u64 dlsym_addr, struct ext_args *ex
     c->poll_fn   = SYM(G, D, LIBKERNEL_HANDLE, "poll");
     c->getsockname_fn = SYM(G, D, LIBKERNEL_HANDLE, "getsockname");
 
-    /* Kernel info helpers */
     c->module_info_from_addr = SYM(G, D, LIBKERNEL_HANDLE, "sceKernelGetModuleInfoFromAddr");
     c->sys_sw_version        = SYM(G, D, LIBKERNEL_HANDLE, "sceKernelGetSystemSwVersion");
     c->virtual_query         = SYM(G, D, LIBKERNEL_HANDLE, "sceKernelVirtualQuery");
     c->mprotect              = SYM(G, D, LIBKERNEL_HANDLE, "sceKernelMprotect");
 
+    /* Try to load IME dialog library */
+    s32 ime = (s32)NC(G, c->load_mod, (u64)"libSceImeDialog.sprx", 0,0,0,0,0);
+    if (ime > 0) {
+        c->ime_init       = SYM(G, D, ime, "sceImeDialogInit");
+        c->ime_get_status = SYM(G, D, ime, "sceImeDialogGetStatus");
+        c->ime_get_result = SYM(G, D, ime, "sceImeDialogGetResult");
+        c->ime_term       = SYM(G, D, ime, "sceImeDialogTerm");
+    }
+
     dbg_init(c);
 }
 
-/* ============================================================
- * Logging
- * ============================================================ */
 void ulog(struct ctx *c, const char *msg) {
     if (c->log_fd < 0 || !c->sendto_fn) return;
     NC(c->G, c->sendto_fn, (u64)c->log_fd, (u64)msg, (u64)s_len(msg),
@@ -76,9 +78,6 @@ void ulog_num(struct ctx *c, const char *prefix, u64 v) {
     ulog(c, b);
 }
 
-/* ============================================================
- * Debug bookkeeping
- * ============================================================ */
 void dbg_init(struct ctx *c) {
     m_set(&c->dbg, 0, sizeof(c->dbg));
     c->dbg.start_ms    = get_uptime_ms(c);
@@ -104,14 +103,14 @@ void dbg_record_press(struct ctx *c, u32 mask) {
         if (c->dbg.flash[i].bit == mask) { c->dbg.flash[i].until_ms = now + 500; return; }
     for (int i = 0; i < 16; i++)
         if (c->dbg.flash[i].bit == 0) {
-            c->dbg.flash[i].bit = mask; c->dbg.flash[i].until_ms = now + 500; return;
+            c->dbg.flash[i].bit = mask;
+            c->dbg.flash[i].until_ms = now + 500;
+            return;
         }
-    c->dbg.flash[0].bit = mask; c->dbg.flash[0].until_ms = now + 500;
+    c->dbg.flash[0].bit = mask;
+    c->dbg.flash[0].until_ms = now + 500;
 }
 
-/* ============================================================
- * Video
- * ============================================================ */
 int ctx_video_up(struct ctx *c, u64 eboot_base) {
     void *G = c->G, *D = c->D;
     if (!c->usleep || !c->load_mod || !c->alloc_dm || !c->map_dm) return -1;
@@ -169,9 +168,6 @@ int ctx_video_up(struct ctx *c, u64 eboot_base) {
     return 0;
 }
 
-/* ============================================================
- * Audio
- * ============================================================ */
 void ctx_audio_up(struct ctx *c) {
     void *G = c->G, *D = c->D;
     s32 aud = (s32)NC(G, c->load_mod, (u64)"libSceAudioOut.sprx",0,0,0,0,0);
@@ -187,26 +183,19 @@ void ctx_audio_up(struct ctx *c) {
     ulog_num(c, "[toolbox] audio_h=", (u64)(u32)c->audio_h);
 }
 
-/* ============================================================
- * Pad — multiple symbol attempts for the trigger effect fn
- * ============================================================ */
 void ctx_pad_up(struct ctx *c) {
     void *G = c->G, *D = c->D;
-
     s32 pad = (s32)NC(G, c->load_mod, (u64)"libScePad.sprx", 0,0,0,0,0);
-    ulog_num(c, "[toolbox] libScePad handle=", (u64)(u32)pad);
     if (pad < 0) { ulog(c, "[toolbox] libScePad load FAILED\n"); return; }
 
     u32 real_user_id = 0;
     s32 usr = (s32)NC(G, c->load_mod, (u64)"libSceUserService.sprx", 0,0,0,0,0);
-    ulog_num(c, "[toolbox] libSceUserService handle=", (u64)(u32)usr);
     if (usr > 0) {
         void *get_user = SYM(G, D, usr, "sceUserServiceGetInitialUser");
         if (get_user) {
             u32 uid = 0;
             s32 rc = (s32)NC(G, get_user, (u64)&uid, 0,0,0,0,0);
             if (rc == 0 && uid != 0) real_user_id = uid;
-            ulog_num(c, "[toolbox] initial uid      =",  (u64)uid);
         }
     }
     if (real_user_id == 0) {
@@ -214,7 +203,6 @@ void ctx_pad_up(struct ctx *c) {
         if (!real_user_id) real_user_id = 1;
     }
     c->user_id = (s32)real_user_id;
-    ulog_num(c, "[toolbox] using user_id=", (u64)(u32)c->user_id);
 
     c->pad_init         = SYM(G, D, pad, "scePadInit");
     c->pad_geth         = SYM(G, D, pad, "scePadGetHandle");
@@ -222,14 +210,12 @@ void ctx_pad_up(struct ctx *c) {
     c->pad_set_lightbar = SYM(G, D, pad, "scePadSetLightBar");
     c->pad_set_vib      = SYM(G, D, pad, "scePadSetVibration");
 
-    /* Try a bunch of alternate trigger symbol names */
     static const char *trig_names[] = {
         "scePadSetTriggerEffect",
         "scePadSetTriggerEffectForController",
-        "scePadSetTriggerEffectEx",
         "scePadSetTriggerEffectA",
         "scePadSetTriggerEffectB",
-        "scePadSetTriggerEffectOld",
+        "scePadSetTriggerEffectEx",
         0
     };
     c->pad_set_trigger = 0;
@@ -239,41 +225,20 @@ void ctx_pad_up(struct ctx *c) {
         if (p) {
             c->pad_set_trigger = p;
             c->pad_trigger_sym_used = trig_names[i];
-            ulog(c, "[toolbox] trigger sym OK: ");
-            ulog(c, trig_names[i]);
-            ulog(c, "\n");
             break;
         }
     }
-    /* Fallback: try libkernel handle */
-    if (!c->pad_set_trigger) {
-        for (int i = 0; trig_names[i]; i++) {
-            void *p = SYM(G, D, LIBKERNEL_HANDLE, trig_names[i]);
-            if (p) {
-                c->pad_set_trigger = p;
-                c->pad_trigger_sym_used = trig_names[i];
-                ulog(c, "[toolbox] trigger from libkernel: ");
-                ulog(c, trig_names[i]);
-                ulog(c, "\n");
-                break;
-            }
-        }
-    }
-    if (!c->pad_set_trigger)
-        ulog(c, "[toolbox] WARN: no trigger effect symbol found\n");
 
     if (c->pad_init) (void)NC(G, c->pad_init, 0,0,0,0,0,0);
     if (c->usleep) NC(G, c->usleep, 50000, 0,0,0,0,0);
     if (c->pad_geth)
         c->pad_h = (s32)NC(G, c->pad_geth, (u64)c->user_id, 0,0,0,0,0);
-    ulog_num(c, "[toolbox] pad_h=", (u64)(u32)c->pad_h);
 }
 
 void ctx_pad_retry(struct ctx *c) {
     if (c->pad_h >= 0 || !c->pad_geth) return;
     if (c->pad_init) (void)NC(c->G, c->pad_init, 0,0,0,0,0,0);
     c->pad_h = (s32)NC(c->G, c->pad_geth, (u64)c->user_id, 0,0,0,0,0);
-    ulog_num(c, "[toolbox] pad_h retry ->", (u64)(u32)c->pad_h);
 }
 
 u32 pad_raw(struct ctx *c) {
@@ -303,15 +268,11 @@ int pad_set_vibration(struct ctx *c, u8 large, u8 small) {
     return (s32)NC(c->G, c->pad_set_vib, (u64)c->pad_h, (u64)&v, 0,0,0,0);
 }
 
-/* ============================================================
- * Trigger effects — correct 32-byte ScePadTriggerEffectParam
- * ============================================================ */
 static void trig_fill(u8 buf[32], int which, int cmd_id,
                       u8 p0, u8 p1, u8 p2, u8 p3) {
     m_set(buf, 0, 32);
     if (which == TRIG_L2 || which == TRIG_BOTH) buf[0] = (u8)cmd_id;
     if (which == TRIG_R2 || which == TRIG_BOTH) buf[1] = (u8)cmd_id;
-
     if (which == TRIG_L2 || which == TRIG_BOTH) {
         buf[0x08 + 0] = (u8)cmd_id;
         buf[0x08 + 1] = p0;
@@ -354,9 +315,6 @@ int pad_set_trigger_slope(struct ctx *c, int which, u8 sPos, u8 ePos, u8 sStr, u
     return trig_send(c, buf);
 }
 
-/* ============================================================
- * Video flip
- * ============================================================ */
 void video_flip(struct ctx *c, int wait_vsync) {
     if (c->video_h < 0 || !c->vid_flip) return;
     NC(c->G, c->vid_flip, (u64)c->video_h, (u64)c->active, 1,
@@ -370,9 +328,6 @@ void video_flip(struct ctx *c, int wait_vsync) {
     c->dbg.flips++;
 }
 
-/* ============================================================
- * Misc
- * ============================================================ */
 u64 get_uptime_ms(struct ctx *c) {
     if (!c->clock_gettime) return 0;
     u64 ts[2] = {0,0};
@@ -406,9 +361,6 @@ void audio_tone(struct ctx *c, int freq, int ms) {
     }
 }
 
-/* ============================================================
- * Cleanup
- * ============================================================ */
 void ctx_cleanup(struct ctx *c) {
     pad_set_vibration(c, 0, 0);
     pad_set_lightbar(c, 0, 0, 0);
@@ -426,9 +378,6 @@ void ctx_cleanup(struct ctx *c) {
         NC(c->G, c->delete_eq, c->eq, 0,0,0,0,0);
 }
 
-/* ============================================================
- * Module info + firmware
- * ============================================================ */
 int get_module_info_of_addr(struct ctx *c, u64 addr, struct module_info_simple *out) {
     m_set(out, 0, sizeof(*out));
     if (!c->module_info_from_addr) return -1;
@@ -437,14 +386,12 @@ int get_module_info_of_addr(struct ctx *c, u64 addr, struct module_info_simple *
     *(u32*)buf = 0x200;
     s32 r = (s32)NC(c->G, c->module_info_from_addr, addr, 1, (u64)buf, 0,0,0);
     if (r != 0) return r;
-    /* name at +0x08 (32 bytes) */
     for (int i = 0; i < 31; i++) {
         char ch = (char)buf[0x08 + i];
         out->name[i] = ch;
         if (!ch) break;
     }
     out->name[31] = 0;
-    /* first segment at +0x160 (verified against LuaC0re) */
     out->base  = *(u64*)(buf + 0x160);
     out->valid = 1;
     return 0;
@@ -453,14 +400,10 @@ int get_module_info_of_addr(struct ctx *c, u64 addr, struct module_info_simple *
 u32 get_fw_version_int(struct ctx *c) {
     if (!c->sys_sw_version) return 0;
     u32 v[4] = {0,0,0,0};
-    s32 r = (s32)NC(c->G, c->sys_sw_version, (u64)v, 0,0,0,0,0);
-    (void)r;
+    (void)(s32)NC(c->G, c->sys_sw_version, (u64)v, 0,0,0,0,0);
     return v[0];
 }
 
-/* ============================================================
- * Memory read/write helpers
- * ============================================================ */
 u8  mem_read8 (struct ctx *c, u64 a) { (void)c; return *(volatile u8 *)(u64)a; }
 u16 mem_read16(struct ctx *c, u64 a) { (void)c; return *(volatile u16*)(u64)a; }
 u32 mem_read32(struct ctx *c, u64 a) { (void)c; return *(volatile u32*)(u64)a; }
@@ -469,3 +412,108 @@ void mem_write8 (struct ctx *c, u64 a, u8 v)  { (void)c; *(volatile u8 *)(u64)a 
 void mem_write16(struct ctx *c, u64 a, u16 v) { (void)c; *(volatile u16*)(u64)a = v; }
 void mem_write32(struct ctx *c, u64 a, u32 v) { (void)c; *(volatile u32*)(u64)a = v; }
 void mem_write64(struct ctx *c, u64 a, u64 v) { (void)c; *(volatile u64*)(u64)a = v; }
+
+/* ------------------------------------------------------------
+ * OSK prompt via sceImeDialog.
+ * Returns 0 on OK (out_ascii filled), <0 on failure/cancel.
+ * ------------------------------------------------------------ */
+static u16 g_osk_text[128];
+static u16 g_osk_prompt[64];
+
+static void ascii_to_u16(u16 *dst, const char *src, int max) {
+    int i = 0;
+    while (src[i] && i < max - 1) { dst[i] = (u16)(u8)src[i]; i++; }
+    dst[i] = 0;
+}
+
+static int u16_to_ascii(char *dst, const u16 *src, int max) {
+    int i = 0;
+    while (src[i] && i < max - 1) { dst[i] = (char)(src[i] & 0xFF); i++; }
+    dst[i] = 0;
+    return i;
+}
+
+int osk_prompt(struct ctx *c, const char *title, const char *initial,
+               char *out_ascii, int out_len, int max_len) {
+    (void)title;
+    if (!c->ime_init || !c->ime_get_status || !c->ime_get_result || !c->ime_term)
+        return -100;
+
+    if (max_len > 120) max_len = 120;
+    ascii_to_u16(g_osk_text,   initial ? initial : "", 128);
+    ascii_to_u16(g_osk_prompt, initial ? initial : "", 64);
+
+    u8 param[256];
+    m_set(param, 0, 256);
+
+    /* SceImeDialogParam layout (PS5 SDK, 120 bytes):
+     *   0x00 u32 userId
+     *   0x04 u32 type (0=DEFAULT)
+     *   0x08 u64 supportedLanguages
+     *   0x10 ptr enterLabel (u16*)
+     *   0x18 ptr textBox.text       <-- input/output buffer
+     *   0x20 ptr textBox.placeholder
+     *   0x28 u32 textBox.length
+     *   0x2C u32 textBox.reserved
+     *   0x30 u32 option.option
+     *   0x34 u32 option.align
+     *   0x38 i32 option.posx
+     *   0x3C i32 option.posy
+     *   0x40 u16 maxTextLength
+     *   0x42 u16 inputMethod
+     *   0x44 u32 filter
+     *   0x48 u32 option2
+     *   0x50 u64 reserved[2]
+     *   0x60 ptr padInfo
+     *   0x68 u32 extKeyboardMode
+     */
+    *(u32*)(param + 0x00) = (u32)c->user_id;
+    *(u32*)(param + 0x04) = 0;
+    *(u64*)(param + 0x08) = 0;
+    *(u64*)(param + 0x10) = 0;
+    *(u64*)(param + 0x18) = (u64)g_osk_text;
+    *(u64*)(param + 0x20) = (u64)g_osk_prompt;
+    *(u32*)(param + 0x28) = 0;
+    *(u32*)(param + 0x2C) = 0;
+    *(u32*)(param + 0x30) = 0;
+    *(u32*)(param + 0x34) = 0;
+    *(u32*)(param + 0x38) = 0;
+    *(u32*)(param + 0x3C) = 0;
+    *(u16*)(param + 0x40) = (u16)max_len;
+    *(u16*)(param + 0x42) = 0;
+    *(u32*)(param + 0x44) = 0;
+    *(u32*)(param + 0x48) = 0;
+
+    s32 r = (s32)NC(c->G, c->ime_init, (u64)param, 0, 0,0,0,0);
+    ulog_num(c, "[toolbox] osk_init ret=", (u64)(u32)r);
+    if (r != 0) return -2;
+
+    int timeout_ms = 60000;
+    int waited = 0;
+    for (;;) {
+        s32 st = (s32)NC(c->G, c->ime_get_status, 0,0,0,0,0,0);
+        if (st == 2) break;   /* FINISHED */
+        if (st < 0) {
+            NC(c->G, c->ime_term, 0,0,0,0,0,0);
+            ulog_num(c, "[toolbox] osk_status err=", (u64)(s64)st);
+            return -3;
+        }
+        if (waited >= timeout_ms) {
+            NC(c->G, c->ime_term, 0,0,0,0,0,0);
+            return -4;
+        }
+        NC(c->G, c->usleep, 33333, 0,0,0,0,0);
+        waited += 33;
+    }
+
+    u8 result[64]; m_set(result, 0, 64);
+    NC(c->G, c->ime_get_result, (u64)result, 0,0,0,0,0);
+    u32 end_status = *(u32*)result;
+
+    NC(c->G, c->ime_term, 0,0,0,0,0,0);
+    ulog_num(c, "[toolbox] osk_end=", (u64)end_status);
+
+    if (end_status != 1) return -5;
+    u16_to_ascii(out_ascii, g_osk_text, out_len);
+    return 0;
+}
