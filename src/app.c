@@ -363,12 +363,34 @@ void audio_tone(struct ctx *c, int freq, int ms) {
     }
 }
 
+/* ============================================================
+ * Cleanup — restore the controller to its default state so
+ * that when control returns to the game (or to the PS5 UI) the
+ * DualSense looks normal again.
+ *
+ *   - Lightbar: soft PS5 blue (0, 0, 200) — this is what the
+ *     console ships the controller with out of the box.
+ *   - Vibration: off.
+ *   - Triggers: no effect (all zeros struct).
+ * ============================================================ */
 void ctx_cleanup(struct ctx *c) {
+    /* 1. Kill vibration */
     pad_set_vibration(c, 0, 0);
-    pad_set_lightbar(c, 0, 0, 0);
+
+    /* 2. Give the lightbar back its default colour */
+    pad_set_lightbar(c, 0, 0, 200);
+
+    /* 3. Remove any trigger effect we may have installed */
     pad_set_trigger_all_off(c);
+
+    /* Let the pad library flush these state changes */
+    if (c->usleep) NC(c->G, c->usleep, 100000, 0,0,0,0,0);
+
+    /* Audio teardown */
     if (c->aud_close && c->audio_h >= 0)
         NC(c->G, c->aud_close, (u64)c->audio_h, 0,0,0,0,0);
+
+    /* Video teardown */
     if (c->fbs[0]) ui_clear(c->fbs[0], 0xFF000000);
     if (c->fbs[1]) ui_clear(c->fbs[1], 0xFF000000);
     if (c->vid_flip && c->video_h >= 0)
@@ -509,17 +531,6 @@ int osk_prompt(struct ctx *c, const char *title, const char *initial,
 
 /* ============================================================
  * System notification
- *
- * Writes a 0xC30-byte struct to /dev/notification0 (identical on
- * PS4 and PS5 — same FreeBSD-derived kernel interface).
- *
- * Layout (mirrors LuaC0re's send_notification):
- *   0x00 u32 type           (0 = standard info popup)
- *   0x10 s32 target_id      (-1 = broadcast to active user)
- *   0x28 u32 unk3
- *   0x2C u32 use_icon_uri   (1 = read icon at 0x42D)
- *   0x2D char message[1024]
- *   0x42D char icon_uri[1024]
  * ============================================================ */
 static u8 g_notify_buf[0xC30];
 
@@ -535,10 +546,10 @@ int notify_send(struct ctx *c, const char *msg, const char *icon_uri) {
 
     m_set(g_notify_buf, 0, sizeof(g_notify_buf));
 
-    *(u32*)(g_notify_buf + 0x00) = 0;            /* type = normal */
-    *(u32*)(g_notify_buf + 0x10) = 0xFFFFFFFF;   /* target_id = -1 (any user) */
+    *(u32*)(g_notify_buf + 0x00) = 0;
+    *(u32*)(g_notify_buf + 0x10) = 0xFFFFFFFF;
     *(u32*)(g_notify_buf + 0x28) = 0;
-    *(u32*)(g_notify_buf + 0x2C) = 1;            /* use_icon_image_uri */
+    *(u32*)(g_notify_buf + 0x2C) = 1;
 
     for (int i = 0; i < mlen; i++)
         g_notify_buf[0x2D + i] = (u8)msg[i];
@@ -551,7 +562,7 @@ int notify_send(struct ctx *c, const char *msg, const char *icon_uri) {
     }
 
     s32 fd = (s32)NC(c->G, c->kopen, (u64)"/dev/notification0",
-                     (u64)0x0001 /* O_WRONLY */, 0, 0, 0, 0);
+                     (u64)0x0001, 0, 0, 0, 0);
     if (fd < 0) {
         fd = (s32)NC(c->G, c->kopen, (u64)"/dev/notification",
                      (u64)0x0001, 0, 0, 0, 0);
