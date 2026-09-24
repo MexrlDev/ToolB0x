@@ -11,12 +11,14 @@
  *   Triangle  space (repeatable)
  *   L1        cursor left (repeatable)
  *   R1        cursor right (repeatable)
+ *   L2        shift cycle: once=single, twice=lock, thrice=off
  *   Circle    cancel / back (single press only)
  *   R2        OK (single press only)
  *   Options   clear all (single press only)
  *
- * Hold any repeatable button for 300 ms and it will start spamming
- * every ~60 ms until released.
+ * On entry, the keyboard waits for all buttons to be released before
+ * accepting any input — this prevents the Cross press that opened the
+ * keyboard from inserting the character under the initial cursor.
  *
  * UDP listener: binds port 9031 while the keyboard is open.
  */
@@ -44,7 +46,7 @@ static int   g_cursor = 0;
 static int   g_maxlen = VKB_MAXLEN;
 static int   g_row    = 1;
 static int   g_col    = 0;
-static int   g_shift  = 0;
+static int   g_shift  = 0;   /* 0=off  1=single  2=lock */
 static int   g_page   = 0;
 static int   g_done   = 0;
 static const char *g_title = 0;
@@ -81,7 +83,6 @@ static void rep_reset(void) {
     }
 }
 
-/* Merge real rising-edge presses with synthesized repeat presses. */
 static u32 rep_apply(struct ctx *c, u32 raw, u32 pressed) {
     u64 now = get_uptime_ms(c);
     u32 eff = pressed;
@@ -90,10 +91,8 @@ static u32 rep_apply(struct ctx *c, u32 raw, u32 pressed) {
         u32 bit = g_rep[i].bit;
         int held = (raw & bit) != 0;
 
-        if (!held) {
-            g_rep[i].active = 0;
-            continue;
-        }
+        if (!held) { g_rep[i].active = 0; continue; }
+
         if (pressed & bit) {
             g_rep[i].press_ms = now;
             g_rep[i].fire_ms  = now;
@@ -264,7 +263,7 @@ static void draw_vkb(struct ctx *c, u32 *fb) {
     draw_text_field(fb, now);
 
     {
-        char s[96]; int p = 0;
+        char s[128]; int p = 0;
         const char *pre = "Page ";
         while (*pre && p < 40) s[p++] = *pre++;
         s[p++] = '1' + g_page;
@@ -273,13 +272,21 @@ static void draw_vkb(struct ctx *c, u32 *fb) {
         const char *cur = "   Cursor:";
         while (*cur && p < 60) s[p++] = *cur++;
         p += s_itoa(s + p, g_cursor);
-        if (g_udp_ok) {
-            const char *udp = "   UDP :9031 listening";
-            while (*udp && p < 88) s[p++] = *udp++;
+        if (g_shift == 1) {
+            const char *sd = "   SHIFT:1";
+            while (*sd && p < 88) s[p++] = *sd++;
+        } else if (g_shift == 2) {
+            const char *sd = "   SHIFT:LOCK";
+            while (*sd && p < 88) s[p++] = *sd++;
+        }
+        if (g_udp_ok && p < 76) {
+            const char *udp = "   UDP :9031";
+            while (*udp && p < 100) s[p++] = *udp++;
         }
         s[p] = 0;
         ui_str(fb, 60, 250, s,
-               g_udp_ok ? RGB(0,220,120) : RGB(120,120,140), 3);
+               g_shift ? RGB(255,200,80) :
+               (g_udp_ok ? RGB(0,220,120) : RGB(120,120,140)), 3);
     }
 
     for (int r = 0; r < 4; r++) {
@@ -321,7 +328,7 @@ static void draw_vkb(struct ctx *c, u32 *fb) {
     ui_fill(fb, 0, SCR_H - 70, SCR_W, 70, RGB(20,20,28));
     ui_fill(fb, 0, SCR_H - 73, SCR_W, 3, RGB(0,180,255));
     ui_str(fb, 60, SCR_H - 44,
-           "D-Pad Move  X Select  [] Del  /\\ Space  L1/R1 Cursor  R2 OK  O Cancel",
+           "D-Pad Move  X Select  [] Del  /\\ Space  L1/R1 Cursor  L2 Shift  R2 OK  O Cancel",
            RGB(120,120,140), 3);
 }
 
@@ -344,9 +351,13 @@ static void delete_before_cursor(void) {
     g_buf[g_len] = 0;
 }
 
+static void shift_cycle(void) {
+    if (g_page == 0) g_shift = (g_shift + 1) % 3;
+}
+
 static void do_action(int idx) {
     switch (idx) {
-        case 0: if (g_page == 0) g_shift = (g_shift + 1) % 3; break;
+        case 0: shift_cycle(); break;
         case 1: insert_char(' '); break;
         case 2: delete_before_cursor(); break;
         case 3: g_page = (g_page + 1) % VKB_PAGES;
@@ -380,13 +391,24 @@ int vkb_prompt(struct ctx *c, const char *title,
 
     rep_reset();
 
+    /* ------------------------------------------------------------
+     * Phantom-press guard: wait for every button to be released
+     * before we start taking input.  This is what stops the Cross
+     * press that opened the keyboard from immediately inserting the
+     * character under the cursor.
+     * ------------------------------------------------------------ */
+    for (int i = 0; i < 40; i++) {
+        if (pad_raw(c) == 0) break;
+        if (c->usleep) NC(c->G, c->usleep, 16000, 0,0,0,0,0);
+    }
+    c->pad_prev = pad_raw(c);
+
     g_udp_fd = udp_open(c);
     g_udp_ok = (g_udp_fd >= 0);
     if (g_udp_ok) ulog(c, "[toolbox] vkb: UDP listening on :9031\n");
     else          ulog(c, "[toolbox] vkb: UDP bind failed\n");
 
     u32 saved_prev = c->pad_prev;
-    c->pad_prev = pad_raw(c);
 
     while (!g_done) {
         udp_poll(c);
@@ -395,7 +417,6 @@ int vkb_prompt(struct ctx *c, const char *title,
         u32 pressed = raw & ~c->pad_prev;
         c->pad_prev = raw;
 
-        /* Merge real edges with auto-repeat synthesized presses */
         u32 eff = rep_apply(c, raw, pressed);
 
         /* ---- Movement ---- */
@@ -430,7 +451,10 @@ int vkb_prompt(struct ctx *c, const char *title,
         if (eff & DS_L1) { if (g_cursor > 0) g_cursor--; }
         if (eff & DS_R1) { if (g_cursor < g_len) g_cursor++; }
 
-        /* ---- Terminal actions: only on real edges ---- */
+        /* ---- L2: shift cycle (single-press only) ---- */
+        if (pressed & DS_L2) shift_cycle();
+
+        /* ---- Terminal actions: real edges only ---- */
         if (pressed & DS_CIRCLE)  g_done = -1;
         if (pressed & DS_OPTIONS) { g_len = 0; g_cursor = 0; g_buf[0] = 0; }
         if (pressed & DS_R2)      g_done = 1;
