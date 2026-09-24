@@ -1,23 +1,24 @@
 #include "screens.h"
 #include "ui.h"
 
-/* 3-page virtual keyboard with a movable insert cursor and an optional
- * UDP listener so a PC/Phone can send text into the field in real time.
+/* 3-page virtual keyboard with a movable insert cursor, an optional
+ * UDP listener, and hold-to-repeat for most buttons.
  *
  * Controls:
- *   D-Pad     navigate
- *   Cross     select char / action
- *   Square    backspace
- *   Triangle  space
- *   L1        cursor left
- *   R1        cursor right
- *   Circle    cancel / back
- *   R2        OK (submit)
- *   Options   clear all
+ *   D-Pad     navigate (repeatable)
+ *   Cross     select char / action (repeatable)
+ *   Square    backspace (repeatable)
+ *   Triangle  space (repeatable)
+ *   L1        cursor left (repeatable)
+ *   R1        cursor right (repeatable)
+ *   Circle    cancel / back (single press only)
+ *   R2        OK (single press only)
+ *   Options   clear all (single press only)
  *
- * UDP listener: binds to port 9031 for the lifetime of the keyboard.
- * Any UTF-8 text received is inserted at the current cursor position.
- * Socket is closed when the keyboard exits.
+ * Hold any repeatable button for 300 ms and it will start spamming
+ * every ~60 ms until released.
+ *
+ * UDP listener: binds port 9031 while the keyboard is open.
  */
 
 #define VKB_MAXLEN 256
@@ -33,9 +34,13 @@
 
 #define ACT_COUNT 7
 
+/* Auto-repeat tuning */
+#define REP_DELAY_MS     300
+#define REP_INTERVAL_MS   60
+
 static char  g_buf[VKB_MAXLEN + 1];
 static int   g_len    = 0;
-static int   g_cursor = 0;     /* insert position: 0..g_len */
+static int   g_cursor = 0;
 static int   g_maxlen = VKB_MAXLEN;
 static int   g_row    = 1;
 static int   g_col    = 0;
@@ -47,7 +52,65 @@ static const char *g_title = 0;
 static s32   g_udp_fd = -1;
 static int   g_udp_ok = 0;
 
-/* ---------- page 0: letters ---------- */
+/* ---------- auto-repeat state ---------- */
+struct rep_key {
+    u32 bit;
+    u64 press_ms;
+    u64 fire_ms;
+    int active;
+};
+
+static struct rep_key g_rep[] = {
+    { DS_UP,       0, 0, 0 },
+    { DS_DOWN,     0, 0, 0 },
+    { DS_LEFT,     0, 0, 0 },
+    { DS_RIGHT,    0, 0, 0 },
+    { DS_CROSS,    0, 0, 0 },
+    { DS_SQUARE,   0, 0, 0 },
+    { DS_TRIANGLE, 0, 0, 0 },
+    { DS_L1,       0, 0, 0 },
+    { DS_R1,       0, 0, 0 },
+};
+#define REP_COUNT ((int)(sizeof(g_rep) / sizeof(g_rep[0])))
+
+static void rep_reset(void) {
+    for (int i = 0; i < REP_COUNT; i++) {
+        g_rep[i].press_ms = 0;
+        g_rep[i].fire_ms  = 0;
+        g_rep[i].active   = 0;
+    }
+}
+
+/* Merge real rising-edge presses with synthesized repeat presses. */
+static u32 rep_apply(struct ctx *c, u32 raw, u32 pressed) {
+    u64 now = get_uptime_ms(c);
+    u32 eff = pressed;
+
+    for (int i = 0; i < REP_COUNT; i++) {
+        u32 bit = g_rep[i].bit;
+        int held = (raw & bit) != 0;
+
+        if (!held) {
+            g_rep[i].active = 0;
+            continue;
+        }
+        if (pressed & bit) {
+            g_rep[i].press_ms = now;
+            g_rep[i].fire_ms  = now;
+            g_rep[i].active   = 1;
+            continue;
+        }
+        if (g_rep[i].active
+            && (now - g_rep[i].press_ms) >= REP_DELAY_MS
+            && (now - g_rep[i].fire_ms)  >= REP_INTERVAL_MS) {
+            g_rep[i].fire_ms = now;
+            eff |= bit;
+        }
+    }
+    return eff;
+}
+
+/* ---------- page layouts ---------- */
 static const char p0_low[4][10] = {
     {'1','2','3','4','5','6','7','8','9','0'},
     {'q','w','e','r','t','y','u','i','o','p'},
@@ -60,16 +123,12 @@ static const char p0_up[4][10] = {
     {'A','S','D','F','G','H','J','K','L','_'},
     {'Z','X','C','V','B','N','M','<','>','+'},
 };
-
-/* ---------- page 1: numbers + symbols ---------- */
 static const char p1_syms[4][10] = {
     {'1','2','3','4','5','6','7','8','9','0'},
     {'-','/',':',';','(',')','$','&','@','"'},
     {'.',',','?','!','\'','_','+','=','<','>'},
     {'[',']','{','}','#','%','^','*','\\','|'},
 };
-
-/* ---------- page 2: extended ---------- */
 static const char p2_syms[4][10] = {
     {'~','`','!','@','#','$','%','^','&','*'},
     {'(','[',']','{','}','<','>','|','/',')'},
@@ -109,21 +168,16 @@ static const char *action_label(int idx, int page) {
 /* ---------- UDP ---------- */
 static s32 udp_open(struct ctx *c) {
     if (!c->socket_fn || !c->bind_fn || !c->close_fn) return -1;
-
-    s32 s = (s32)NC(c->G, c->socket_fn, 2, 2, 0, 0, 0, 0);   /* AF_INET, SOCK_DGRAM */
+    s32 s = (s32)NC(c->G, c->socket_fn, 2, 2, 0, 0, 0, 0);
     if (s < 0) return -1;
-
     if (c->setsockopt_fn) {
         u32 one = 1;
         NC(c->G, c->setsockopt_fn, (u64)s, 0xFFFF, 0x0004, (u64)&one, 4, 0);
     }
-
     u8 sa[16]; m_set(sa, 0, 16);
     sa[0] = 16; sa[1] = 2;
     sa[2] = (u8)((VKB_UDP_PORT >> 8) & 0xFF);
     sa[3] = (u8)(VKB_UDP_PORT & 0xFF);
-    /* sa[4..7] = 0 (INADDR_ANY) */
-
     if ((s32)NC(c->G, c->bind_fn, (u64)s, (u64)sa, 16, 0, 0, 0) != 0) {
         NC(c->G, c->close_fn, (u64)s, 0, 0, 0, 0, 0);
         return -1;
@@ -132,38 +186,30 @@ static s32 udp_open(struct ctx *c) {
 }
 
 static void udp_close(struct ctx *c) {
-    if (g_udp_fd >= 0 && c->close_fn) {
+    if (g_udp_fd >= 0 && c->close_fn)
         NC(c->G, c->close_fn, (u64)g_udp_fd, 0, 0, 0, 0, 0);
-    }
     g_udp_fd = -1;
     g_udp_ok = 0;
 }
 
-/* Poll UDP — non-blocking via poll(). */
 static int udp_poll(struct ctx *c) {
     if (g_udp_fd < 0 || !c->poll_fn || !c->recvfrom_fn) return 0;
-
     u8 pfd[8];
     *(s32*)(pfd + 0) = g_udp_fd;
-    *(u16*)(pfd + 4) = 0x0001;   /* POLLIN */
+    *(u16*)(pfd + 4) = 0x0001;
     *(u16*)(pfd + 6) = 0;
-
     s32 pr = (s32)NC(c->G, c->poll_fn, (u64)pfd, 1, 0, 0, 0, 0);
     if (pr <= 0) return 0;
-
     char buf[256];
     s32 n = (s32)NC(c->G, c->recvfrom_fn,
                     (u64)g_udp_fd, (u64)buf, 255, 0, 0, 0);
     if (n <= 0) return 0;
     buf[n] = 0;
-
     int injected = 0;
     for (int i = 0; i < n; i++) {
         char ch = buf[i];
         if (ch == '\r' || ch == '\n') continue;
         if (g_len >= g_maxlen) break;
-
-        /* shift right to make room at cursor */
         for (int j = g_len; j > g_cursor; j--) g_buf[j] = g_buf[j - 1];
         g_buf[g_cursor] = ch;
         g_cursor++;
@@ -180,7 +226,6 @@ static void draw_text_field(u32 *fb, u64 now) {
     ui_fill(fb, 60, ty, SCR_W - 120, 100, RGB(20, 30, 50));
     ui_frame(fb, 60, ty, SCR_W - 120, 100, RGB(70, 100, 150), 3);
 
-    /* simple horizontal scroll so the cursor is always visible */
     const int VISIBLE = 40;
     int view_start = 0;
     if (g_cursor > VISIBLE - 5) view_start = g_cursor - (VISIBLE - 5);
@@ -191,7 +236,6 @@ static void draw_text_field(u32 *fb, u64 now) {
     for (int i = view_start; i < g_len; i++) {
         if (i == g_cursor && blink)
             ui_fill(fb, x - 2, ty + 26, 4, 56, RGB(0, 180, 255));
-
         char s[2] = { g_buf[i], 0 };
         ui_str(fb, x, ty + 30, s, RGB(255, 255, 255), 4);
         x += 8 * 4;
@@ -199,7 +243,6 @@ static void draw_text_field(u32 *fb, u64 now) {
     if (g_cursor == g_len && blink)
         ui_fill(fb, x - 2, ty + 26, 4, 56, RGB(0, 180, 255));
 
-    /* counter top-right */
     char cnt[20]; int p = 0;
     p += s_itoa(cnt + p, g_len);
     cnt[p++] = '/';
@@ -212,7 +255,6 @@ static void draw_vkb(struct ctx *c, u32 *fb) {
     u64 now = get_uptime_ms(c);
     ui_clear(fb, RGB(8, 8, 14));
 
-    /* Header */
     ui_fill(fb, 0, 0, SCR_W, 90, RGB(20,20,28));
     ui_fill(fb, 0, 90, SCR_W, 3, RGB(0,180,255));
     ui_str(fb, 60, 22, "KEYBOARD", RGB(0,180,255), 5);
@@ -221,7 +263,6 @@ static void draw_vkb(struct ctx *c, u32 *fb) {
 
     draw_text_field(fb, now);
 
-    /* status line */
     {
         char s[96]; int p = 0;
         const char *pre = "Page ";
@@ -241,7 +282,6 @@ static void draw_vkb(struct ctx *c, u32 *fb) {
                g_udp_ok ? RGB(0,220,120) : RGB(120,120,140), 3);
     }
 
-    /* Char grid */
     for (int r = 0; r < 4; r++) {
         for (int col = 0; col < KB_COLS; col++) {
             int x = KB_X + col * (KB_W + KB_GAP);
@@ -261,7 +301,6 @@ static void draw_vkb(struct ctx *c, u32 *fb) {
         }
     }
 
-    /* Action row */
     for (int i = 0; i < ACT_COUNT; i++) {
         int x = KB_X + act_start[i] * (KB_W + KB_GAP);
         int w = act_w[i] * KB_W + (act_w[i] - 1) * KB_GAP;
@@ -279,11 +318,10 @@ static void draw_vkb(struct ctx *c, u32 *fb) {
                sel ? 0xFFFFFFFF : RGB(230,230,240), 3);
     }
 
-    /* Footer */
     ui_fill(fb, 0, SCR_H - 70, SCR_W, 70, RGB(20,20,28));
     ui_fill(fb, 0, SCR_H - 73, SCR_W, 3, RGB(0,180,255));
     ui_str(fb, 60, SCR_H - 44,
-           "D-Pad Move  X Select  [] Del  /\\ Space  L1/R1 Cursor  R2 OK  O Cancel  OPT Clear",
+           "D-Pad Move  X Select  [] Del  /\\ Space  L1/R1 Cursor  R2 OK  O Cancel",
            RGB(120,120,140), 3);
 }
 
@@ -340,54 +378,59 @@ int vkb_prompt(struct ctx *c, const char *title,
     g_done = 0;
     g_title = title;
 
-    /* Try to open the UDP listener */
+    rep_reset();
+
     g_udp_fd = udp_open(c);
     g_udp_ok = (g_udp_fd >= 0);
-    if (g_udp_ok) {
-        ulog(c, "[toolbox] vkb: UDP listening on :9031\n");
-    } else {
-        ulog(c, "[toolbox] vkb: UDP bind failed, no remote input\n");
-    }
+    if (g_udp_ok) ulog(c, "[toolbox] vkb: UDP listening on :9031\n");
+    else          ulog(c, "[toolbox] vkb: UDP bind failed\n");
 
     u32 saved_prev = c->pad_prev;
     c->pad_prev = pad_raw(c);
 
     while (!g_done) {
-        /* Poll UDP for remote-typed characters */
         udp_poll(c);
 
         u32 raw     = pad_raw(c);
         u32 pressed = raw & ~c->pad_prev;
         c->pad_prev = raw;
 
-        if (pressed & DS_UP) {
+        /* Merge real edges with auto-repeat synthesized presses */
+        u32 eff = rep_apply(c, raw, pressed);
+
+        /* ---- Movement ---- */
+        if (eff & DS_UP) {
             if (g_row > 0) {
                 g_row--;
                 if (g_row == 4 && g_col >= ACT_COUNT) g_col = ACT_COUNT - 1;
             }
         }
-        if (pressed & DS_DOWN) {
+        if (eff & DS_DOWN) {
             if (g_row < 4) {
                 g_row++;
                 if (g_row == 4 && g_col >= ACT_COUNT) g_col = ACT_COUNT - 1;
             }
         }
-        if (pressed & DS_LEFT)  { if (g_col > 0) g_col--; }
-        if (pressed & DS_RIGHT) {
+        if (eff & DS_LEFT)  { if (g_col > 0) g_col--; }
+        if (eff & DS_RIGHT) {
             int maxc = (g_row == 4) ? (ACT_COUNT - 1) : (KB_COLS - 1);
             if (g_col < maxc) g_col++;
         }
 
-        if (pressed & DS_CROSS) {
+        /* ---- Char / action ---- */
+        if (eff & DS_CROSS) {
             if (g_row == 4) do_action(g_col);
             else insert_char(page_char(g_page, g_shift, g_row, g_col));
         }
-        if (pressed & DS_SQUARE)   delete_before_cursor();
-        if (pressed & DS_TRIANGLE) insert_char(' ');
 
-        if (pressed & DS_L1) { if (g_cursor > 0) g_cursor--; }
-        if (pressed & DS_R1) { if (g_cursor < g_len) g_cursor++; }
+        /* ---- Shortcuts ---- */
+        if (eff & DS_SQUARE)   delete_before_cursor();
+        if (eff & DS_TRIANGLE) insert_char(' ');
 
+        if (eff & DS_L1) { if (g_cursor > 0) g_cursor--; }
+        if (eff & DS_R1) { if (g_cursor < g_len) g_cursor++; }
+
+        /* ---- Terminal actions: only on real edges ---- */
         if (pressed & DS_CIRCLE)  g_done = -1;
         if (pressed & DS_OPTIONS) { g_len = 0; g_cursor = 0; g_buf[0] = 0; }
         if (pressed & DS_R2)      g_done = 1;
@@ -397,10 +440,10 @@ int vkb_prompt(struct ctx *c, const char *title,
     }
 
     udp_close(c);
+    rep_reset();
 
     c->pad_prev = saved_prev;
 
-    /* Wait for buttons to be released so the caller doesn't see a phantom press */
     for (int i = 0; i < 30; i++) {
         if (pad_raw(c) == 0) break;
         if (c->usleep) NC(c->G, c->usleep, 33000, 0,0,0,0,0);
