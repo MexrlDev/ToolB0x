@@ -16,9 +16,12 @@
  *   R2        OK (single press only)
  *   Options   clear all (single press only)
  *
- * On entry, the keyboard waits for all buttons to be released before
- * accepting any input — this prevents the Cross press that opened the
- * keyboard from inserting the character under the initial cursor.
+ * On entry the keyboard requires the pad to be REPORTED FULLY RELEASED
+ * for 5 consecutive reads before accepting input, then waits a short
+ * cooldown.  This absorbs both real slow releases and the transient
+ * bogus 0-read that some devices report right after the video flip,
+ * so the Cross press that opened the keyboard can never insert the
+ * character under the initial cursor.
  *
  * UDP listener: binds port 9031 while the keyboard is open.
  */
@@ -40,13 +43,18 @@
 #define REP_DELAY_MS     300
 #define REP_INTERVAL_MS   60
 
+/* Entry settle tuning */
+#define VKB_RELEASE_ZEROS   5       /* consecutive zero reads required */
+#define VKB_ENTRY_TIMEOUT 120       /* max iterations (~2 s)         */
+#define VKB_COOLDOWN_FRAMES 6       /* ignored frames after entry    */
+
 static char  g_buf[VKB_MAXLEN + 1];
 static int   g_len    = 0;
 static int   g_cursor = 0;
 static int   g_maxlen = VKB_MAXLEN;
 static int   g_row    = 1;
 static int   g_col    = 0;
-static int   g_shift  = 0;   /* 0=off  1=single  2=lock */
+static int   g_shift  = 0;
 static int   g_page   = 0;
 static int   g_done   = 0;
 static const char *g_title = 0;
@@ -392,23 +400,40 @@ int vkb_prompt(struct ctx *c, const char *title,
     rep_reset();
 
     /* ------------------------------------------------------------
-     * Phantom-press guard: wait for every button to be released
-     * before we start taking input.  This is what stops the Cross
-     * press that opened the keyboard from immediately inserting the
-     * character under the cursor.
+     * Entry settle:
+     *   - wait for the pad to report fully released for 5 CONSECUTIVE
+     *     reads (protects against a spurious 0-read right after the
+     *     video flip while Cross is still physically held)
+     *   - then ignore any input for a short cooldown window
+     *     (absorbs a slow release + press of the entry button)
      * ------------------------------------------------------------ */
-    for (int i = 0; i < 40; i++) {
-        if (pad_raw(c) == 0) break;
-        if (c->usleep) NC(c->G, c->usleep, 16000, 0,0,0,0,0);
+    {
+        int zeros = 0;
+        int iter = 0;
+        while (iter < VKB_ENTRY_TIMEOUT) {
+            u32 r = pad_raw(c);
+            if (r == 0) {
+                if (++zeros >= VKB_RELEASE_ZEROS) break;
+            } else {
+                zeros = 0;
+            }
+            /* keep drawing so the keyboard appears immediately */
+            draw_vkb(c, c->fbs[c->active]);
+            video_flip(c, 1);
+            if (c->usleep) NC(c->G, c->usleep, 16000, 0,0,0,0,0);
+            iter++;
+        }
     }
-    c->pad_prev = pad_raw(c);
 
     g_udp_fd = udp_open(c);
     g_udp_ok = (g_udp_fd >= 0);
     if (g_udp_ok) ulog(c, "[toolbox] vkb: UDP listening on :9031\n");
     else          ulog(c, "[toolbox] vkb: UDP bind failed\n");
 
-    u32 saved_prev = c->pad_prev;
+    /* Sync edge-detection baseline right before the main loop begins */
+    c->pad_prev = pad_raw(c);
+
+    int cooldown = VKB_COOLDOWN_FRAMES;
 
     while (!g_done) {
         udp_poll(c);
@@ -416,6 +441,12 @@ int vkb_prompt(struct ctx *c, const char *title,
         u32 raw     = pad_raw(c);
         u32 pressed = raw & ~c->pad_prev;
         c->pad_prev = raw;
+
+        /* Ignore input for a handful of frames after entry */
+        if (cooldown > 0) {
+            cooldown--;
+            pressed = 0;
+        }
 
         u32 eff = rep_apply(c, raw, pressed);
 
@@ -466,9 +497,9 @@ int vkb_prompt(struct ctx *c, const char *title,
     udp_close(c);
     rep_reset();
 
-    c->pad_prev = saved_prev;
-
-    for (int i = 0; i < 30; i++) {
+    /* Wait for full release before returning so the caller does not see
+     * a phantom press from the button that closed the keyboard. */
+    for (int i = 0; i < 40; i++) {
         if (pad_raw(c) == 0) break;
         if (c->usleep) NC(c->G, c->usleep, 33000, 0,0,0,0,0);
     }
