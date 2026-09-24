@@ -21,6 +21,15 @@
 
 ---
 
+## Functions
+- controller light dimmer, Vibrator, Light changer 
+- Kernel and Modules dumper
+- video & audio tester
+- code launcher
+- and more
+
+---
+
 ## Credits
 * Mexrldev - Project, debugging, etc
 
