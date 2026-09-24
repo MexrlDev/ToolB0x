@@ -1,12 +1,6 @@
 #!/usr/bin/env python3
 """
 toolbox_launcher.py - LuaC0re Toolbox launcher (iPhone / desktop).
-
-v3.2:
-  - Terminal output is now 100% ASCII.
-  - "Watching logs" prompt shows both PC (Ctrl+C) and phone (Stop) stop.
-  - Fix (v3.1): only replace the exact PC_IP declaration line.
-  - --debug-logs true|false argument (default true).
 """
 
 import argparse
@@ -19,7 +13,7 @@ import sys
 import threading
 import time
 
-DEFAULT_CONSOLE_IP = "192.168.1.6" # Your luac0re ip (ps4 ip)
+DEFAULT_CONSOLE_IP = "192.168.1.6"  # Your PS4/PS5 IP
 DEFAULT_LAUNCHER   = "toolbox_launcher.lua"
 DEFAULT_SHELLCODE  = "toolbox.bin"
 
@@ -76,13 +70,21 @@ def make_udp_socket():
     return s
 
 
-class LogServer(threading.Thread):
-    """UDP log listener - prints whatever the shellcode sends us."""
+def str_to_bool(v):
+    if isinstance(v, bool):
+        return v
+    return str(v).strip().lower() in ("1", "true", "yes", "on", "y", "t")
 
-    def __init__(self, port, host="0.0.0.0"):
+
+class LogServer(threading.Thread):
+    """UDP log listener - receives debug logs and watches for execution finish."""
+
+    def __init__(self, port, host="0.0.0.0", verbose=True):
         super().__init__(daemon=True)
         self.host, self.port = host, port
+        self.verbose = verbose
         self._stop_event = threading.Event()
+        self.done_event = threading.Event()
         self.sock = None
         self.scport = None
 
@@ -94,20 +96,22 @@ class LogServer(threading.Thread):
                 break
             except OSError as e:
                 if attempt == 2:
-                    print("[log] WARN: cannot bind UDP "
-                          + self.host + ":" + str(self.port)
-                          + " (" + str(e) + ").")
-                    if IS_WINDOWS:
-                        print("[log] Windows: allow Python through the "
-                              "firewall for UDP " + str(self.port) + ".")
+                    if self.verbose:
+                        print("[log] WARN: cannot bind UDP "
+                              + self.host + ":" + str(self.port)
+                              + " (" + str(e) + ").")
+                        if IS_WINDOWS:
+                            print("[log] Windows: allow Python through the "
+                                  "firewall for UDP " + str(self.port) + ".")
                     s.close()
                     return
                 time.sleep(0.5)
 
         s.settimeout(0.5)
         self.sock = s
-        print("[log] UDP listening on " + self.host + ":" + str(self.port),
-              flush=True)
+        if self.verbose:
+            print("[log] UDP listening on " + self.host + ":" + str(self.port),
+                  flush=True)
 
         while not self._stop_event.is_set():
             try:
@@ -120,13 +124,18 @@ class LogServer(threading.Thread):
             ts = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
             msg = data.decode("utf-8", errors="replace").rstrip("\n")
             msg = msg.encode("ascii", errors="replace").decode("ascii")
-            print("[" + ts + "] " + addr[0] + "  " + msg, flush=True)
+
+            if self.verbose:
+                print("[" + ts + "] " + addr[0] + "  " + msg, flush=True)
 
             if msg.startswith("SCPORT "):
                 try:
                     self.scport = int(msg.split()[1])
                 except (ValueError, IndexError):
                     pass
+
+            if "toolbox returned" in msg or "EXIT" in msg:
+                self.done_event.set()
 
         s.close()
 
@@ -172,8 +181,6 @@ def send_payload(host, filepath, port, pc_ip=None, retries=PAYLOAD_RETRIES):
           + host + ":" + str(port))
     if replacement:
         print('[1]   Injected PC_IP = "' + replacement + '"')
-    else:
-        print('[1]   Debug logs disabled (PC_IP = "")')
 
     last_err = None
     for attempt in range(1, retries + 1):
@@ -305,12 +312,6 @@ def stream_shellcode(host, path,
     return False
 
 
-def str_to_bool(v):
-    if isinstance(v, bool):
-        return v
-    return str(v).strip().lower() in ("1", "true", "yes", "on", "y", "t")
-
-
 def main():
     ap = argparse.ArgumentParser(
         description="LuaC0re Toolbox launcher (payload + shellcode)")
@@ -322,8 +323,7 @@ def main():
     ap.add_argument("--log-port",     type=int, default=LOG_PORT)
     ap.add_argument("--debug-logs", type=str_to_bool, default=True,
                     metavar="true|false",
-                    help="capture UDP debug logs from the console "
-                         "(default: true).")
+                    help="capture UDP debug logs from the console (default: true)")
     ap.add_argument("--local-ip",     default=None,
                     help="override auto-detected host LAN IP")
     ap.add_argument("--no-shellcode", action="store_true")
@@ -333,7 +333,7 @@ def main():
     a = ap.parse_args()
 
     print("=" * 60)
-    print(" LuaC0re Toolbox launcher (v3.2)")
+    print(" LuaC0re Toolbox launcher (v3.3)")
     print(" Host OS: " + OS_NAME)
     print(" Debug logs: " + ("ENABLED" if a.debug_logs else "DISABLED"))
     print("=" * 60)
@@ -347,29 +347,23 @@ def main():
         print("[*] Shellcode: " + sc_path + " ("
               + format(os.path.getsize(sc_path), ",") + " bytes)")
 
-    pc_ip = ""
-    if a.debug_logs:
-        pc_ip = a.local_ip or get_local_ip()
-        if pc_ip == "127.0.0.1":
-            print("[*] WARN: no LAN route detected - pass --local-ip")
+    # Always resolve LAN IP so the Lua script receives a valid target socket address
+    pc_ip = a.local_ip or get_local_ip()
+    if pc_ip == "127.0.0.1":
+        print("[*] WARN: no LAN route detected - pass --local-ip")
 
     print("[*] Console IP  : " + str(a.host))
-    if pc_ip:
-        print("[*] Host IP     : " + pc_ip)
-    else:
-        print("[*] Host IP     : (logs disabled - no UDP listener)")
+    print("[*] Host IP     : " + pc_ip)
 
-    log_thread = None
-    if a.debug_logs and pc_ip:
-        log_thread = LogServer(a.log_port)
-        log_thread.start()
-        time.sleep(0.2)
+    # Log listener starts regardless, but suppresses printing if debug_logs is False
+    log_thread = LogServer(a.log_port, verbose=a.debug_logs)
+    log_thread.start()
+    time.sleep(0.2)
 
     print()
 
     if not send_payload(a.host, a.launcher, a.payload_port, pc_ip=pc_ip):
-        if log_thread:
-            log_thread.stop()
+        log_thread.stop()
         return 1
 
     if a.shellcode_delay > 0:
@@ -383,26 +377,26 @@ def main():
             ok = stream_shellcode(a.host, sc_path,
                                   total_timeout=a.scport_wait)
         if not ok:
-            if log_thread:
-                log_thread.stop()
+            log_thread.stop()
             return 1
 
-    if log_thread:
+    if a.debug_logs:
         print()
         print("[*] Watching logs. To stop:")
         print("[*]   PC    -> press Ctrl+C")
         print("[*]   Phone -> press the Stop button")
-        try:
-            while log_thread.is_alive():
-                time.sleep(0.5)
-        except KeyboardInterrupt:
-            print()
-            print("[*] Stopping...")
-        finally:
-            log_thread.stop()
-    else:
+
+    try:
+        while log_thread.is_alive():
+            if log_thread.done_event.is_set():
+                time.sleep(0.1)
+                break
+            time.sleep(0.5)
+    except KeyboardInterrupt:
         print()
-        print("[*] No debug listener - exiting.")
+        print("[*] Stopping...")
+    finally:
+        log_thread.stop()
 
     print("Done!")
     return 0
