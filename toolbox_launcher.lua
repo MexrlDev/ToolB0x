@@ -1,20 +1,34 @@
 --[[
-  toolbox_launcher.lua — Luac0re payload for LuaC0re Toolbox (v1)
+  toolbox_launcher.lua — Luac0re payload for LuaC0re Toolbox (v3.1)
 
-  Same two-stage memory strategy as doom_launcher.lua:
-    1. mmap(PROT_RWX, 1 MB)     ← primary
-    2. JIT with sizes >= 512 KB ← fallback
+  v3.1:
+    - Fixed: PC_IP placeholder was being replaced BOTH in the declaration
+      and in the HAVE_LOGS check, causing logs to silently disable.
+      The check now uses a regex that matches a valid IPv4 pattern.
+    - Python now only replaces the exact declaration line.
 
-  Accepts mmap() return if > 0x10000 (avoids Lua 5.3 signed-int
-  hex-literal wraparound bug on 0x8000000000000000).
+  v3:
+    - PC_IP is no longer hardcoded.  The Python launcher detects the
+      host's LAN IP and substitutes the placeholder just before sending.
+      If left unsubstituted the payload simply skips UDP logging.
+    - Everything else unchanged: real user id lookup, two-stage memory
+      strategy (mmap -> JIT fallback), shellcode port scan.
+
+  Two-stage memory strategy:
+    1. mmap(PROT_RWX, 1 MB)     <- primary
+    2. JIT with sizes >= 512 KB <- fallback
 
   Dynamic shellcode port scan 5001..5020.
 ]]
 
-local PC_IP        = "192.168.1.2"    -- <-- YOUR PC IP here (not the console's)
+local PC_IP        = "__PC_IP__"
 local LOG_PORT     = 9027
 local SC_PORT_BASE = 5001
 local SC_PORT_MAX  = 5020
+
+-- Enable logging only if PC_IP is a real IPv4 address.
+-- Using a regex here so it survives any substitution path.
+local HAVE_LOGS = (PC_IP:match("^%d+%.%d+%.%d+%.%d+$") ~= nil)
 
 init_dlsym()
 sceMsgDialogTerminate()
@@ -33,20 +47,61 @@ local function make_sockaddr_in(port, ip)
     return sa
 end
 
-local log_sock = create_socket(AF_INET, SOCK_DGRAM, 0)
-local log_sa   = make_sockaddr_in(LOG_PORT, PC_IP)
+local log_sock = -1
+local log_sa   = nil
+
+if HAVE_LOGS then
+    log_sock = create_socket(AF_INET, SOCK_DGRAM, 0)
+    log_sa   = make_sockaddr_in(LOG_PORT, PC_IP)
+end
 
 local function ulog(m)
-    if log_sock >= 0 then
+    if HAVE_LOGS and log_sock >= 0 and log_sa then
         syscall.sendto(log_sock, m .. "\n", #m + 1, 0, log_sa, 16)
     end
 end
-ulog("toolbox_launcher: starting v1")
+
+if HAVE_LOGS then
+    ulog("toolbox_launcher: starting v3.1 (logs -> " .. PC_IP .. ":" ..
+         tostring(LOG_PORT) .. ")")
+end
+
+-- ============================================================
+-- Ensure module loader is available
+-- ============================================================
+if not sceKernelLoadStartModule then
+    sceKernelLoadStartModule = func_wrap(dlsym(LIBKERNEL_HANDLE, "sceKernelLoadStartModule"))
+end
+
+-- ============================================================
+-- Query real initial user id
+-- ============================================================
+local real_uid = 0
+do
+    local libUser = sceKernelLoadStartModule("libSceUserService.sprx", 0, 0, 0, 0, 0)
+    ulog("libSceUserService handle=" .. tostring(libUser))
+    if libUser and libUser > 0 then
+        local getInit = dlsym(libUser, "sceUserServiceGetInitialUser")
+        if getInit then
+            ulog("sceUserServiceGetInitialUser addr=0x" .. string.format("%x", getInit))
+            local uid_buf = malloc(8)
+            write32(uid_buf, 0)
+            local r = func_wrap(getInit)(uid_buf)
+            real_uid = read32(uid_buf)
+            ulog("GetInitialUser ret=" .. tostring(r) ..
+                 " uid=" .. tostring(real_uid))
+        end
+    end
+end
+if real_uid == 0 then
+    real_uid = 1
+    ulog("using fallback uid=1")
+end
 
 -- ============================================================
 -- Memory — try mmap first, JIT fallback
 -- ============================================================
-local SC_TARGET = 0x100000          -- 1 MB, plenty for toolbox
+local SC_TARGET = 0x100000          -- 1 MB
 local rw, rx    = 0, 0
 local SC_SIZE   = SC_TARGET
 
@@ -163,7 +218,6 @@ local function receive_shellcode(dest, srv_fd, max_size)
 end
 
 local n = receive_shellcode(rw, srv, SC_SIZE)
--- Toolbox binary is small; require at least 16 KB of real code.
 if n < 0x4000 then
     error("short receive: got " .. tostring(n) .. " bytes, expected >= 16 KB")
 end
@@ -174,21 +228,22 @@ end
 --   +0x08 s64 step
 --   +0x10 u32 frame_count
 --   +0x14 u32 _pad
---   +0x18 s32 log_fd
+--   +0x18 s32 log_fd       (-1 => no logging)
 --   +0x1C s32 pad_fd
 --   +0x20 u8  log_addr[16]
---   +0x30 u64 dbg[0]   (= user id, optional)
+--   +0x30 u64 dbg[0]       (= real initial user id)
 -- ============================================================
-local userId = 0
-ulog("userId = 0 (hardcoded, shellcode falls back to 1)")
+ulog("userId passed to shellcode = " .. tostring(real_uid))
 
 local ext = malloc(0x80)
 memset(ext, 0, 0x80)
 write64(ext + 0x00, 0xDEAD)
-write32(ext + 0x18, log_sock)
+write32(ext + 0x18, log_sock)   -- -1 if logs disabled
 write32(ext + 0x1C, -1)
-for i = 0, 15 do write8(ext + 0x20 + i, read8(log_sa + i)) end
-write64(ext + 0x30, userId)
+if log_sa then
+    for i = 0, 15 do write8(ext + 0x20 + i, read8(log_sa + i)) end
+end
+write64(ext + 0x30, real_uid)
 
 -- ============================================================
 -- Jump into shellcode
